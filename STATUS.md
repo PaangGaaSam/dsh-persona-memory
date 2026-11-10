@@ -123,3 +123,19 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 - 用户会直接照做，所以要主动把不确定与风险讲清楚，不因对方不问而省略。
 - 每次改完代码明确说"需不需要重启"，并给出重启后的验证步骤。
 - 数据类操作前先看真实状态（`/status`、文件、日志），不凭印象下结论。
+
+## 12. 发布状态（2026-11-10 16:30）
+
+- **GitHub**：<https://github.com/PaangGaaSam/dsh-persona-memory>（public，分支 `main`，首个 commit `982026c`，20 文件）。
+  - 已加 topic `dsh-plugin`；About 描述已设；`LICENSE` = MIT；`.gitattributes` 强制 LF。
+  - `git remote` 走 SSH：`git@github.com:PaangGaaSam/dsh-persona-memory.git`。
+- **打包校验**：`npm pack --dry-run` → 15 files / 39.8 kB，含 `lib/client.js` 与 `cordis.patch.yml`，装下来即可运行、**无需构建步骤**。
+- **依赖口径**：peer 从 6 个虚的裁到 3 个——`cordis`、`dsh-tools`（静态 import，必需）、`dsh-llm`（`try/catch` 动态 import 带兜底，标 optional）。范围用 `^0.2.1-rc.1`，否则 `*` 不匹配预发布宿主。
+- **dsh-market 收录**：条目 `data/plugins/PaangGaaSam__dsh-persona-memory.yml`，`category: memory`。仓库年龄门槛 1 天 —— 建于 2026-11-10 16:08（UTC+8），故 **2026-11-11 16:08 之后** gate 才会转绿。
+
+### 本机环境坑（复发时照这个绕）
+
+- `~/.ssh/config` 第 8/23 行的 `HostKeyAlgorithms +ssh-rsa,ssh-dss`：新版 OpenSSH 已移除 ssh-dss，遇到不认识的算法会**终止解析整个 config**，portable-git 自带的 ssh 因此全部不可用。绕法：`GIT_SSH_COMMAND='C:/Windows/System32/OpenSSH/ssh.exe -o StrictHostKeyChecking=accept-new'`。根治：两处删掉 `,ssh-dss`。
+- workspace-write 沙箱下，任何需要 schannel 证书库或子进程管道的命令都跑不通（`git push`、`ssh`、`curl`、凭据助手 → `SEC_E_NO_CREDENTIALS` / `couldn't create signal pipe, Win32 error 5`）。这类命令要一次性提权到 danger-full-access。
+- GitHub 凭据现状：`~/.git-credentials` 里存的是**已失效的旧密码**；GCM 因系统 socks5 代理报 `ServicePointManager 不支持 socks5` 而完全不可用；`~/.ssh` 现已有 `id_ed25519`（2026-11-10 生成并登记到 GitHub）。**push 走 SSH，不要走 HTTPS。**
+- `~/.dsh/llm-deepseek` 只有 `files-v3.json`；宿主 `app.asar` **没有** `ctx.llm.embed` / embedding 服务（只有 `ctx.llm.stream`）—— 这是 v0.3 若要上向量必须先解决的问题。
