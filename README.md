@@ -1,5 +1,7 @@
 # dsh-persona-memory
 
+**English** · [简体中文](README.zh-CN.md)
+
 Daily cross-workspace session digest that grows a **user profile** and a **companion personality**, then injects both into every prompt — with a settings page to inspect and steer it.
 
 ## Install
@@ -106,7 +108,7 @@ $DSH_HOME/persona-memory/
 | `POST /persona-memory/run` | `{ forcePersona }` — run the digest now |
 | `GET /persona-memory/documents` | Both documents as sections of entries, plus the latest daily note |
 | `POST /persona-memory/pin` | `{ doc, id, pinned }` |
-| `GET /persona-memory/history` | `?doc=profile|persona` — pre-write backups |
+| `GET /persona-memory/history` | `?doc=profile` or `?doc=persona` — pre-write backups |
 | `POST /persona-memory/rollback` | `{ doc, name }` — restore one backup |
 
 Every non-loopback request is rejected with 403; wrong methods get 405.
