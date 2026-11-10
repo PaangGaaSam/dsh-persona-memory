@@ -1,7 +1,7 @@
 # dsh-persona-memory — 项目状态（交接用）
 
-> 更新时间：**2026-11-10 19:05**。当前版本：**0.2.5**（37 项测试全过，**待重启生效**）。
-> compact 后先读 **§0 → §1 → §17（最新改动）→ §16（交接速览）**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§15 是之后发生的事。
+> 更新时间：**2026-11-10 18:35**。当前版本：**0.2.6**（39 项测试全过，**待重启生效**）。
+> compact 后先读 **§0 → §1 → §18（最新改动）→ §17 → §16（交接速览）**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§18 是之后发生的事。
 
 ---
 
@@ -12,8 +12,9 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 ## 1. 当前状态
 
 - 包：`D:\dsh-persona-memory`；profile `desktop` 以 `link:` 安装（`dsh.profile.bundles` 含 `dsh-persona-memory`）。
-- 版本 **0.2.5**（0.2.1 → 0.2.2 → 0.2.3 → 0.2.4 → 0.2.5 全在 11-10 当天完成）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
-- 测试：`node test/run.mjs` → **37 项全过**；`node --check lib/*.js` 全过。
+- 版本 **0.2.6**（0.2.1 → … → 0.2.6 全在 11-10 当天完成）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
+- 测试：`node test/run.mjs` → **39 项全过**；`node --check lib/*.js` 全过。
+- 0.2.5 已实测：6 个会话 → 18 条 self notes，日报的 `## 我的判断` 正常落盘；但**自述合并失败**（`persona: no JSON object`），已在 0.2.6 修（见 §18）。
 - 设置页已在「设置 → 记忆与画像」出现；配色/通知/置顶/回滚已人工验证。**待确认**：下拉框在 0.2.3 修完后是否还渲染异常（见 §16）。
 - 系统通知实测可弹；用户已打开 `notifyOnRun`。
 
@@ -259,3 +260,43 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 3. 点「强制合并性格」→ 日志应出现 `stage1 ... N self notes`；`persona.md` 里新条目必须是第一人称且带事件，`## 还没想清楚的` 里可能出现拿不出证据的描述。
 4. `node test/inspect-injection.mjs` → 注入段不应出现「助手应 / 助手保持」，也不应出现 `[分区]` 标签或 `证据：`。
 5. 同日再跑一次：`daily/2026-11-10.md` 里应已有 `## 我的判断` 区，跨天证据能接着累积。
+
+## 18. v0.2.6 —— 0.2.5 首次实跑暴露的两个真 bug
+
+0.2.5 重启后用户点了「强制合并性格」，整轮 12 分钟跑完。结果一半好一半坏，暴露两个必须修的 bug。
+
+### 好消息（说明 0.2.5 的主链路是通的）
+
+- 6 个会话 → 6 张卡，**18 条 self notes**（`stage1 ... 2 observations, 3 self notes` 每场都有）。
+- `daily/2026-11-10.md` 的 `## 我的判断` 区正常落盘，是真正的「事件 → 我的判断」第一人称文本，例如"用户要求安装 dsh-market，我先探索桌面端环境，发现沙箱阻止写入 profile 后升级权限重试安装。→ 我判断这次安装需要突破沙箱写限制……"。
+- 画像 v2 → v3（+12）。`persona.md` 未改动（合并失败），注入段仍为空（预期）。
+
+### bug 1：证据 token 全变成 `session-session-`（严重，跨天证据根本不可能累积）
+
+`sessionKey()` 原本是 `session-${id.slice(0,8)}`。但**宿主给的 `session.id` 本身就以 `session-` 开头**（`session-7b3c4fb6-56bc-4ea7-ac4f-…`），于是得到 `session-` + `session-` = `session-session-` —— 一天里所有会话共用同一个 token，`evidenceStats` 永远只算 1 个会话。
+
+这个 bug 一直在，只是被掩盖了：观察的证据通常走「模型把证据回吐」这条路（模型从提示里的会话号自己写 token），而我这次让 self 直接走 `cites` → `sessionKey()`，才把它暴露出来。旧的单元测试用的是裸 uuid（`abcd1234-ef56`），从来没覆盖过真实格式。
+
+修法：先剥掉已有的 `session-`/`session_` 前缀，再取前 8 位十六进制；非十六进制的退化为前 8 个字符。旧的坏 token 信息已丢失（uuid 被截掉了），只能靠下一次运行重写今日日报自愈。
+
+### bug 2：自述合并 `persona: no JSON object`
+
+`parsePersonaJSON` 失败后整个 stage 抛错，文件不动、`personaResult` 为 null —— 从报告里看只像"没新条目"，根本看不出是失败。而且没有重试，白白浪费了一整轮 12 分钟的 digest。
+
+0.2.6 的处置：
+- `extractJson()` 重写：先整体 `JSON.parse`，再扫描候选 `{`/`[`；**某个跨度解析失败不再 `break`**（原来会因此丢掉后面完整的 JSON），并新增 `repairJson()` 兜底：转义字符串里的裸换行/制表符、去掉尾逗号。这是「模型把长中文写进字符串时最常见的两种破法」。
+- `PERSONA_SYSTEM` 输出收紧：**最多 5 条、每条不超过 80 字**，并禁止在 JSON 字符串里换行、禁止未转义引号。
+- `personaStage` 失败重试一次（`persona#1` / `persona#2`），两次都失败才抛错。
+- 失败时把**原始输出**写进日志（`persona raw (attempt N): …`），下次不用猜。
+- `runDigest` 把错误存进 `personaResult.error`，`formatReport` 显示「自述：合并失败（原因），文件未改动，原始输出已写进日志」。沉默的 null 才是最坏的情况。
+
+### 测试
+
+39 项全过（新增 2）：`sessionKey` 对真实 `session-<uuid>` 不再产出 `session-session-`、两个不同会话得到两个不同 token；`extractJson` 能修复字符串里的裸换行、尾逗号，并在前面有坏对象时仍找到后面的好 JSON。
+
+### 验证步骤（0.2.6）
+
+1. 重启桌面端 → 状态卡应显示 `v0.2.6`。
+2. 设置 → 记忆与画像 → 再点一次「强制合并性格」。
+3. 跑完看三处：日志有 `persona: +N ~M …`（不是 `persona failed`）；`daily/2026-11-10.md` 的 `## 我的判断` 证据应变成 `2026-11-10/session-xxxxxxxx`（不再是 `session-session-`）；`persona.md` 出现第一人称条目。
+4. `node test/inspect-injection.mjs` → 应看到「## 我是谁（…）」段，且自检三项都是 none。

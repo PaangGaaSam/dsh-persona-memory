@@ -24,7 +24,7 @@ import {
   renderPersonaInjection,
   setPinned,
 } from '../lib/profile.js'
-import { extractJson, parseCard, parseDaily, parseDailyObservations, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest } from '../lib/digest.js'
+import { extractJson, parseCard, parseDaily, parseDailyObservations, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites } from '../lib/digest.js'
 import { PERSONA_HEADING } from '../lib/inject.js'
 import { resolveDshHome } from '../lib/util.js'
 
@@ -1140,6 +1140,38 @@ ok('persona: renaming the headings does not drop existing entries', () => {
   const after = parseProfile(migrated.text, PERSONA_SECTIONS)
   assert.strictEqual(after.get('core').length, 1)
   assert.strictEqual(after.get('style').length, 1)
+})
+
+ok('sessionKey strips the host prefix so each conversation keeps its own token', () => {
+  // The host already names sessions `session-<uuid>`; prefixing again collapsed
+  // every session of a day into `session-session-`, which made the promotion
+  // thresholds impossible to reach.
+  assert.strictEqual(sessionKey({ id: 'session-7b3c4fb6-56bc-4ea7-a6ad-33ab86047639' }), 'session-7b3c4fb6')
+  assert.strictEqual(sessionKey({ id: 'c7653975-4416-4523-9bcc-f656c987108f' }), 'session-c7653975')
+  assert.strictEqual(sessionKey({ id: 'session-8034214a-98e5-4381-82b8-e72b7dde7c70' }), 'session-8034214a')
+  assert.strictEqual(sessionKey({ id: 'session-x' }), 'session-x')
+  assert.strictEqual(sessionKey({ file: 'C:\\logs\\abcdef12.jsonl.zstd' }), 'session-onl.zstd')
+  const sessions = [
+    { id: 'session-aaaa1111-0000', messages: [{ role: 'user', text: 'a', time: Date.parse('2026-11-10T10:00:00') }] },
+    { id: 'session-bbbb2222-0000', messages: [{ role: 'user', text: 'b', time: Date.parse('2026-11-10T11:00:00') }] },
+  ]
+  const tokens = sessions.flatMap((session) => evidenceFromCites([1], session, '2026-11-10'))
+  assert.strictEqual(formatEvidence(tokens), '2026-11-10/session-aaaa1111、2026-11-10/session-bbbb2222')
+  assert.deepStrictEqual(evidenceStats(tokens), { sessions: 2, dates: 1 })
+  assert.ok(!formatEvidence(tokens).includes('session-session-'))
+})
+
+ok('extractJson survives raw newlines, trailing commas, and a broken leading object', () => {
+  // A literal newline inside a string is the most common way a model breaks its
+  // own JSON; the whole persona stage used to die on it.
+  const multiline = '结果：\n```json\n{"add":[{"section":"style","text":"我上次先给结论，\n因为他明显不耐烦","confidence":0.6}]}\n```'
+  const repaired = extractJson(multiline)
+  assert.strictEqual(repaired.add[0].text, '我上次先给结论，\n因为他明显不耐烦')
+  const trailing = extractJson('{"add":[{"text":"我倾向于先验证",},],}')
+  assert.strictEqual(trailing.add[0].text, '我倾向于先验证')
+  // A malformed object must not hide a valid one that follows it.
+  const twoSpans = '先看重试：{oops} 再说：{"add":[{"text":"我记住了"}]}'
+  assert.deepStrictEqual(extractJson(twoSpans).add, [{ text: '我记住了' }])
 })
 
 await Promise.all(pending)
