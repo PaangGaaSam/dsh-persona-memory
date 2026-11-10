@@ -12,7 +12,7 @@ dsh plugin add github:PaangGaaSam/dsh-persona-memory
 
 Then restart the desktop app. No build step, no native dependencies, and no API key of its own — the digest runs on the host's configured model.
 
-Open **设置 → 插件 → 记忆与画像 / Settings → Plugins → Memory & persona** to change the schedule, model, budget or scope, and to run the first digest immediately (`立即运行`, or `强制合并性格` to exercise the persona merge). Data lives in `$DSH_HOME/persona-memory/` and is never uploaded anywhere.
+Open **设置 → 插件 → 记忆与画像 / Settings → Plugins → Memory & persona** to change the schedule, model, budget or scope, and to run the first digest immediately (`立即运行`, or `强制合并自述` to exercise the self-account merge). Data lives in `$DSH_HOME/persona-memory/` and is never uploaded anywhere.
 
 Requirements: DSH desktop with the `web` client platform (the settings page is a `dsh.client` bundle) and Node `^22.19.0 || >=24.0.0`.
 
@@ -42,7 +42,9 @@ Self-accounts land in **还没想清楚的** first; the plugin then moves entrie
 Two rules keep it honest:
 
 - **Supersede** — when a new self-account contradicts a settled entry the model names it (`supersedes: "<id>"`); that entry's confidence drops by 0.3 and it returns to candidates instead of coexisting with its opposite. Taking yourself back is encouraged: if last time's reasoning no longer holds, say why.
-- **Decay** — an entry without new evidence for `personaDemoteAfterDays` (default 30) steps back to candidates. Nothing is deleted; pinned and user-locked entries never move.
+- **Decay** — an entry without new evidence for `personaDemoteAfterDays` (default 30) steps back to candidates. Nothing is deleted; pinned entries never move.
+
+`persona.md` has **no user-locked section**: identity is not something the user defines. Rules the user dictates belong to the profile (手动锁定 / 雷区), are injected separately, and never mix into the self-account. A leftover `## 用户固定规则` heading in an older document is ignored — not deleted, just no longer read or written.
 
 Evidence is `date/session` tokens (`2026-11-10/session-7b3c4fb6`), and the date comes from the **cited turn** (`[#n]` in the stage-1 prompt) rather than the run, so a session that spans midnight is dated correctly. The persona stage also reads the `## 我的判断` section of the last `personaUpdateEveryDays` daily notes, so self-evidence can cross days; renaming that heading would keep the cross-day count at zero and the core section forever empty.
 
@@ -50,15 +52,17 @@ Evidence is **canonicalised on the way in and on the way out**: whatever the mod
 
 ## Settings page
 
-The plugin ships a browser half (`dsh.client`) that registers a **记忆与画像 / Memory & persona** section in the host settings. It shows the run status, lets you edit the schedule, model, budget and scope, run the digest (optionally forcing a persona merge), pin or unpin individual entries, restore a pre-write backup, and read the latest daily note.
+The plugin ships a browser half (`dsh.client`) that registers a **记忆与画像 / Memory & persona** section in the host settings. It shows the run status, lets you edit the schedule, model, budget and scope, run the digest (optionally forcing a self-account merge), pin or unpin individual entries, restore a pre-write backup, and read the latest daily note.
 
-Every knob in the config block below is editable there — including the core-personality date threshold and the demote window — so the patch row is never the only way in. Each field carries a one-line explanation of what it changes and the page validates what it can (time format, numeric ranges) before the request leaves: an invalid value shows a message under the control and disables **保存**. **Provider and model are dropdowns** fed by the host's own model catalogue (`ctx.llm.listProviders()` / `listModels()`, served over `GET /persona-memory/models`); the controls use `color-scheme: inherit`, so the closed box and the native popup follow whatever light/dark scheme the host resolved. When an adapter cannot enumerate its models the fields fall back to free-text inputs, and the value that is already saved is always kept as an option, so opening the page can never silently change it.
+The **my self-account** card reports **how many lines are injected right now** (and whether the block is empty). The file and the prompt are two different things: candidates never inject, so when it says "nothing is injected yet" the card also says how much evidence is still missing — no need to read code or logs.
+
+Every knob in the config block below is editable there — including the 我认为我是谁 date threshold and the demote window — so the patch row is never the only way in. Each field carries a one-line explanation of what it changes and the page validates what it can (time format, numeric ranges) before the request leaves: an invalid value shows a message under the control and disables **保存**. **Provider and model are dropdowns** fed by the host's own model catalogue (`ctx.llm.listProviders()` / `listModels()`, served over `GET /persona-memory/models`); the controls use `color-scheme: inherit`, so the closed box and the native popup follow whatever light/dark scheme the host resolved. When an adapter cannot enumerate its models the fields fall back to free-text inputs, and the value that is already saved is always kept as an option, so opening the page can never silently change it.
 
 Settings made there are stored in `persona-memory/config.json` as overrides and win over the patch-row config; delete that file to fall back to the row. The page talks to the plugin's own loopback routes, so no host settings plumbing is involved.
 
 ### Run notifications
 
-While the page is open it polls `/persona-memory/status` every 30 s. When a new run appears, a banner reports it: time, sessions, cards, profile/persona deltas, and how many personality entries were promoted/demoted/superseded. The banner is always on; ticking **运行通知** additionally asks for a desktop system notification, and **测试系统通知** probes whether the shell grants it. Nothing is pushed while the page is closed — there is no host notification service to hook into.
+While the page is open it polls `/persona-memory/status` every 30 s. When a new run appears, a banner reports it: time, sessions, cards, profile/self-account deltas, and how many self-account entries were promoted/demoted/superseded. A failed merge says so, with the reason (the file is left untouched and the raw answer goes to the log), instead of looking like "nothing new". The banner is always on; ticking **运行通知** additionally asks for a desktop system notification, and **测试系统通知** probes whether the shell grants it. Nothing is pushed while the page is closed — there is no host notification service to hook into.
 
 The run record itself carries the outcome (`profile`, `persona`, `skipped`, `error`) so the banner needs no log parsing.
 
@@ -66,8 +70,8 @@ The run record itself carries the outcome (`profile`, `persona`, `skipped`, `err
 
 | Tool | Purpose |
 |---|---|
-| `persona_digest` | Run the digest now (`force_persona: true` forces the weekly persona merge) |
-| `persona_profile` | Read the profile and personality markdown |
+| `persona_digest` | Run the digest now (`force_persona: true` forces the weekly self-account merge) |
+| `persona_profile` | Read the profile and self-account markdown |
 | `persona_status` | Schedule, last run, file sizes |
 | `persona_pin` / `persona_unpin` | Pin an entry by id (`[pref-1]` …) |
 | `persona_rollback` | List or restore pre-write backups |

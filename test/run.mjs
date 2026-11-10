@@ -6,7 +6,7 @@ import { Readable } from 'node:stream'
 import { collectSessions, decodeSessionLog, parseSessionLog } from '../lib/collector.js'
 import { composeConfig, EDITABLE_KEYS, loadOverrides, publicConfig, saveOverrides } from '../lib/config.js'
 import { backupDocument, listHistory, restoreHistory } from '../lib/history.js'
-import { describeDocument, documentsPayload, readJsonBody, registerRoutes } from '../lib/http.js'
+import { describeDocument, documentsPayload, personaInjection, readJsonBody, registerRoutes } from '../lib/http.js'
 import {
   appendLockedEntry,
   applyPersonaSuggestions,
@@ -353,6 +353,41 @@ ok('http: documents project entries and the panel payload carries the daily note
   assert.strictEqual(payload.daily.text, '# 今天\n')
   assert.strictEqual(payload.personaIsDue, true)
   assert.strictEqual(payload.documents.profile.stats.counts['沟通习惯'], 1)
+  // The panel must be able to tell "the file has entries" from "the prompt gets
+  // any": an empty persona document injects nothing, and the count says so.
+  assert.deepStrictEqual(payload.documents.persona.injected, { enabled: true, count: 0, chars: 0 })
+  assert.deepStrictEqual(documentsPayload(paths, composeConfig({}, { promptBudgetChars: 0 }), {}).documents.persona.injected, { enabled: false, count: 0, chars: 0 })
+})
+
+ok('persona injection count matches what actually reaches the prompt', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-inject-'))
+  const paths = { root: dir, personaFile: path.join(dir, 'persona.md') }
+  const config = composeConfig({}, {})
+  const rule = { date: '2026-11-10', title: '助手性格', styleMinSessions: 3, coreMinSessions: 3, coreMinDates: 3, demoteAfterDays: 30 }
+  let text = emptyProfile(PERSONA_SECTIONS, '助手性格')
+  // One candidate: no sessions yet, so nothing is injected.
+  text = applyPersonaSuggestions(text, PERSONA_SECTIONS, [
+    { section: 'candidate', text: '我上次先给结论是对的（当时他没追问）', confidence: 0.7, evidence: '2026-11-10/session-a' },
+  ], rule).text
+  assert.strictEqual(personaInjection(text, config).count, 0, 'a candidate is never injected')
+  // Three distinct sessions promote it to 我和你相处时的样子.
+  for (const session of ['session-b', 'session-c', 'session-d']) {
+    text = applyPersonaSuggestions(text, PERSONA_SECTIONS, [
+      { section: 'style', text: '我上次先给结论是对的（当时他没追问）', confidence: 0.7, evidence: `2026-11-10/${session}` },
+    ], rule).text
+  }
+  const injected = personaInjection(text, config)
+  assert.strictEqual(injected.count, 1)
+  assert.ok(injected.chars > 0)
+})
+
+ok('the persona document has no user-locked section left', () => {
+  assert.deepStrictEqual(PERSONA_SECTIONS.map((section) => section.key), ['core', 'style', 'candidate'])
+  // A leftover heading from an older document must be ignored, not crash parse.
+  const legacy = ['## 用户固定规则', '- [lock-1] 不要用「您」', '## 我认为我是谁', ''].join('\n')
+  const state = parseProfile(legacy, PERSONA_SECTIONS)
+  assert.strictEqual(state.size, 3)
+  assert.deepStrictEqual(appendLockedEntry(legacy, PERSONA_SECTIONS, '不要用「您」'), { text: legacy, added: false })
 })
 
 ok('http: readJsonBody accepts JSON, rejects junk, treats an empty body as {}', async () => {
@@ -464,7 +499,12 @@ ok('client bundle registers a settings section and renders the loaded panel', as
         ], { date: '2026-11-10' }).text, 'profile'),
         stats: { counts: {}, pinned: 0 },
       },
-      persona: { text: '', sections: describeDocument(emptyProfile(PERSONA_SECTIONS, '助手性格'), 'persona'), stats: { counts: {}, pinned: 0 } },
+      persona: {
+        text: '',
+        sections: describeDocument(emptyProfile(PERSONA_SECTIONS, '助手性格'), 'persona'),
+        stats: { counts: {}, pinned: 0 },
+        injected: { enabled: true, count: 0, chars: 0 },
+      },
     },
     personaIsDue: false,
     daily: { date: '2026-11-10', text: '# 今天\n- 完成 v0.2' },
@@ -586,9 +626,13 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   // The form must expose the same knobs as the patch row, not a subset.
   const numbers = elements.filter((element) => element.type === 'input' && element.props.type === 'number')
   assert.ok(numbers.length >= 8, 'every numeric knob has a field')
-  assert.ok(rendered.some((text) => text.includes('核心性格最少日期数')), 'exposes the core-date threshold')
+  assert.ok(rendered.some((text) => text.includes('「我认为我是谁」最少日期数')), 'exposes the core-date threshold')
   assert.ok(rendered.some((text) => text.includes('无新证据降级（天）')), 'exposes the demote window')
   assert.ok(!rendered.some((text) => text.includes('{days}')), 'persona hint interpolates every placeholder')
+  // The panel must explain an empty prompt instead of leaving the user guessing
+  // why a document with entries injects nothing.
+  assert.ok(rendered.some((text) => text.includes('当前注入为空')), 'says the prompt is empty and why')
+  assert.ok(!rendered.some((text) => text.includes('{s}') || text.includes('{n}')), 'the injection hint interpolates too')
 
   // Validation and help text: the hint explains the knob, and a value outside the
   // field's range shows a message and blocks saving instead of bouncing off the host.
