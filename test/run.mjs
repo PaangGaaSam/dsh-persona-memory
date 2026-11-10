@@ -407,8 +407,21 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   }
   const fakeJsxRuntime = {
     Fragment: Symbol('Fragment'),
-    jsx: (type, props) => ({ type, props: props ?? {} }),
-    jsxs: (type, props) => ({ type, props: props ?? {} }),
+    // React's automatic runtime takes a *key* as the third argument, so a string
+    // is legitimate. An element or array there is the settings-card bug: the
+    // children were handed over as the key and silently dropped. Refuse that.
+    jsx: (type, props, maybeKey) => {
+      if (maybeKey !== undefined && typeof maybeKey === 'object') {
+        throw new Error(`jsx third argument is the key, not children: ${typeof type === 'function' ? type.name : String(type)}`)
+      }
+      return { type, props: props ?? {} }
+    },
+    jsxs: (type, props, maybeKey) => {
+      if (maybeKey !== undefined && typeof maybeKey === 'object') {
+        throw new Error(`jsxs third argument is the key, not children: ${typeof type === 'function' ? type.name : String(type)}`)
+      }
+      return { type, props: props ?? {} }
+    },
   }
   const payload = {
     ok: true,
@@ -442,8 +455,18 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   }
   const fetchCalls = []
   let currentPayload = payload
+  const modelsPayload = {
+    ok: true,
+    providers: [{ id: 'deepseek-account', name: 'DeepSeek' }],
+    models: { 'deepseek-account': [{ id: 'deepseek-flash', name: 'deepseek-flash' }, { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] },
+  }
   globalThis.fetch = async (url, init) => {
     fetchCalls.push({ url, method: init?.method ?? 'GET' })
+    // The panel asks for the model catalogue separately so a slow provider never
+    // delays the form; answer it like the host does.
+    if (String(url).endsWith('/persona-memory/models')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify(modelsPayload) }
+    }
     return { ok: true, status: 200, text: async () => JSON.stringify(currentPayload) }
   }
   // Capture the polling timer so the notification path can be driven by hand.
@@ -534,6 +557,23 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   assert.ok(rendered.some((text) => text.includes('喜欢先给结论')), 'renders a profile entry')
   assert.ok(rendered.some((text) => text.includes('# 今天')), 'renders the latest daily note')
 
+  // Provider and model become selects once the host catalogue lands, and the
+  // saved model must be one of the options — a select that dropped it would
+  // rewrite the config on the next save.
+  const selects = () => elements.filter((element) => element.type === 'select')
+  assert.strictEqual(selects().length, 2, 'provider and model render as selects')
+  const modelSelect = selects()[1]
+  assert.strictEqual(modelSelect.props.value, 'deepseek-v4-pro')
+  const modelOptions = modelSelect.props.children.map((option) => option.props.value)
+  assert.deepStrictEqual(modelOptions, ['deepseek-flash', 'deepseek-v4-pro'])
+  assert.ok(rendered.some((text) => text.includes('deepseek-flash')), 'option labels reach the document')
+  // The form must expose the same knobs as the patch row, not a subset.
+  const numbers = elements.filter((element) => element.type === 'input' && element.props.type === 'number')
+  assert.ok(numbers.length >= 8, 'every numeric knob has a field')
+  assert.ok(rendered.some((text) => text.includes('核心性格最少日期数')), 'exposes the core-date threshold')
+  assert.ok(rendered.some((text) => text.includes('无新证据降级（天）')), 'exposes the demote window')
+  assert.ok(!rendered.some((text) => text.includes('{days}')), 'persona hint interpolates every placeholder')
+
   // The notification toggle must react immediately instead of waiting for the
   // round trip (that lag is what made the card flicker).
   const checkboxes = () => elements.filter((element) => element.type === 'input' && element.props.type === 'checkbox')
@@ -619,6 +659,10 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
     },
     logger: { info: (message) => logged.push(message), error: (message) => logged.push(`ERR ${message}`) },
     version: '0.2.0',
+    modelCatalogue: async () => ({
+      providers: [{ id: 'deepseek-account', name: 'DeepSeek' }],
+      models: { 'deepseek-account': [{ id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] },
+    }),
   })
   const call = (name, options = {}) => new Promise((resolve, reject) => {
     const handler = routes.get(`/persona-memory/${name}`)
@@ -666,6 +710,14 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
   const remote = await call('status', { remote: '10.1.2.3' })
   assert.strictEqual(remote.status, 403)
   assert.strictEqual(JSON.parse(remote.body).ok, false)
+
+  const models = await call('models')
+  assert.strictEqual(models.status, 200)
+  const modelsBody = JSON.parse(models.body)
+  assert.strictEqual(modelsBody.providers[0].id, 'deepseek-account')
+  assert.strictEqual(modelsBody.models['deepseek-account'][0].id, 'deepseek-v4-pro')
+  assert.strictEqual((await call('models', { method: 'POST' })).status, 405)
+  assert.strictEqual((await call('models', { remote: '10.1.2.3' })).status, 403)
 
   const wrongMethod = await call('run', { method: 'GET' })
   assert.strictEqual(wrongMethod.status, 405)
@@ -756,6 +808,7 @@ ok('client styles only reference theme tokens the host actually defines', () => 
   // using them made buttons white-on-white in dark mode. New tokens must be checked
   // against the theme bundle before they are added here.
   const allowed = new Set([
+    '--dsw-alias-label-primary',
     '--dsw-alias-label-tertiary',
     '--dsw-alias-border-l2',
     '--dsw-alias-state-business-primary',

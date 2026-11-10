@@ -46,6 +46,8 @@ Evidence is `date/session` tokens (`2026-11-10/session-7b3c4fb6`), and the date 
 
 The plugin ships a browser half (`dsh.client`) that registers a **记忆与画像 / Memory & persona** section in the host settings. It shows the run status, lets you edit the schedule, model, budget and scope, run the digest (optionally forcing a persona merge), pin or unpin individual entries, restore a pre-write backup, and read the latest daily note.
 
+Every knob in the config block below is editable there — including the core-personality date threshold and the demote window — so the patch row is never the only way in. **Provider and model are dropdowns** fed by the host's own model catalogue (`ctx.llm.listProviders()` / `listModels()`, served over `GET /persona-memory/models`). When an adapter cannot enumerate its models the fields fall back to free-text inputs, and the value that is already saved is always kept as an option, so opening the page can never silently change it.
+
 Settings made there are stored in `persona-memory/config.json` as overrides and win over the patch-row config; delete that file to fall back to the row. The page talks to the plugin's own loopback routes, so no host settings plumbing is involved.
 
 ### Run notifications
@@ -107,6 +109,7 @@ $DSH_HOME/persona-memory/
 | `POST /persona-memory/config` | `{ patch }` — validate, persist, apply |
 | `POST /persona-memory/run` | `{ forcePersona }` — run the digest now |
 | `GET /persona-memory/documents` | Both documents as sections of entries, plus the latest daily note |
+| `GET /persona-memory/models` | Provider and model catalogue for the dropdowns |
 | `POST /persona-memory/pin` | `{ doc, id, pinned }` |
 | `GET /persona-memory/history` | `?doc=profile` or `?doc=persona` — pre-write backups |
 | `POST /persona-memory/rollback` | `{ doc, name }` — restore one backup |

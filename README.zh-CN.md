@@ -46,6 +46,8 @@ dsh plugin add github:PaangGaaSam/dsh-persona-memory
 
 插件带一个浏览器半身（`dsh.client`），在宿主设置里注册「**记忆与画像**」分区。它显示运行状态，可改调度、模型、预算与范围，可手动跑摘要（可强制合并性格），可逐条置顶 / 取消置顶，可回滚到写入前的备份，也能读最新一篇日报。
 
+下面配置块里的每一个开关都能在页面上改 —— 包括核心性格的日期门槛和降级天数 —— 补丁行不再是非用不可的唯一入口。**提供方和模型是下拉框**，选项来自宿主自己的模型目录（`ctx.llm.listProviders()` / `listModels()`，经 `GET /persona-memory/models` 送出）。某个适配器列不出模型时，这两个字段退回手填输入框；已经保存的值永远保留在选项里，所以打开页面绝不会悄悄改掉它。
+
 在这里做的设置会以覆盖项存进 `persona-memory/config.json`，优先级高于补丁行配置；删掉该文件即回落到补丁行。设置页直接调插件自己的回环路由，不经过宿主的设置管道。
 
 ### 运行通知
@@ -107,6 +109,7 @@ $DSH_HOME/persona-memory/
 | `POST /persona-memory/config` | `{ patch }` —— 校验、持久化、生效 |
 | `POST /persona-memory/run` | `{ forcePersona }` —— 立刻跑摘要 |
 | `GET /persona-memory/documents` | 两份文档按分区返回条目，附最新日报 |
+| `GET /persona-memory/models` | 下拉框用的提供方与模型目录 |
 | `POST /persona-memory/pin` | `{ doc, id, pinned }` |
 | `GET /persona-memory/history` | `?doc=profile` 或 `?doc=persona` —— 写入前备份 |
 | `POST /persona-memory/rollback` | `{ doc, name }` —— 恢复某份备份 |

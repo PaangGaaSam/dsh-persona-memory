@@ -139,3 +139,16 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 - workspace-write 沙箱下，任何需要 schannel 证书库或子进程管道的命令都跑不通（`git push`、`ssh`、`curl`、凭据助手 → `SEC_E_NO_CREDENTIALS` / `couldn't create signal pipe, Win32 error 5`）。这类命令要一次性提权到 danger-full-access。
 - GitHub 凭据现状：`~/.git-credentials` 里存的是**已失效的旧密码**；GCM 因系统 socks5 代理报 `ServicePointManager 不支持 socks5` 而完全不可用；`~/.ssh` 现已有 `id_ed25519`（2026-11-10 生成并登记到 GitHub）。**push 走 SSH，不要走 HTTPS。**
 - `~/.dsh/llm-deepseek` 只有 `files-v3.json`；宿主 `app.asar` **没有** `ctx.llm.embed` / embedding 服务（只有 `ctx.llm.stream`）—— 这是 v0.3 若要上向量必须先解决的问题。
+
+## 13. v0.2.2（2026-11-10 傍晚）——「设置页有标签没控件」修复 + 模型下拉
+
+**根因（最容易重犯的一条）**：`jsx(Field, props, child)` —— React 自动运行时的**第三个参数是 key，不是 children**。所有配置字段都这么写，于是控件被当成 key 丢掉，卡片上只剩标签文本。用户看到「value 看不见」，实际是控件根本没进 DOM；不是配色问题。
+
+- 修法：全部 `jsx(C, props, child)` → `h(C, props, [child])`（`h` 就是把 children 塞进 props 的 `jsxs` 包装）。
+- 防线：测试里的假 `jsx`/`jsxs` 现在对「第三个参数是对象/数组」直接抛错；并断言数字输入框 ≥8 个、provider/model 是 `<select>`、选项含已保存的模型、`{days}` 占位符已替换。
+- 顺带修：`.pm-input` 不再 `color:inherit` + 白底，改**透明底 + `label-primary` 文字**，杜绝第二类隐形（沿用 0.2.1 那次 `bg-l1` 的教训）。
+- 新增 `GET /persona-memory/models`：`ctx.llm.listProviders()` + `listModels()`；提供方/模型变下拉框，目录为空时退回输入框，已保存值永远在选项里。
+- 补齐两个此前只有 JSON 能改的键：`personaCoreMinDates`、`personaDemoteAfterDays`。现在 `EDITABLE_KEYS` 全部有对应控件。
+- 版本 **0.2.2**；30 项测试全过；**必须重启桌面端**，`status.version` 才会从 0.2.1 变 0.2.2。
+
+验证：重启 → 设置 → 记忆与画像 → 「计划与模型」卡片应有 12 个输入框（其中 2 个是下拉）+ 4 个开关 + 排除工作区文本框；状态卡的三个值应当可见。
