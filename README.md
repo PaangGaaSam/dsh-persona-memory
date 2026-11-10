@@ -121,3 +121,13 @@ Every non-loopback request is rejected with 403; wrong methods get 405.
 - Requires the host process to be running at the scheduled time; missed days are caught up once on the next start.
 - Model output must be JSON; parsing tolerates prose/fences but a bad generation only degrades that stage (the other stages still write).
 - Source changes to a `link:`-installed package need a host restart (the loader does not hot-reload linked sources, and the client bundle is served from `lib/client.js` as built).
+
+## If this is useful to you
+
+⭐ **[A star](https://github.com/PaangGaaSam/dsh-persona-memory/stargazers)** is the only upkeep signal this project gets — no telemetry, no usage reporting, nothing phoning home. It is also what tells other people the plugin is worth trying.
+
+- **It did something odd, or you disagree with how the personality settles?** Open an [issue](https://github.com/PaangGaaSam/dsh-persona-memory/issues) and say what you expected. Behaviour questions are the most useful ones — the evidence thresholds are guesses until someone outside this machine runs them for a month.
+- **You installed it and then stopped using it?** That is a genuinely valuable report too. Tell us why; "the daily note was noise" is a design decision worth revisiting.
+- **Want to show what it grew into?** A trimmed `profile.md` / `persona.md` makes a great issue. Remove anything personal first — those files are a record of your own conversations.
+
+Pull requests are welcome, and so are plain opinions. If you file one, keep the rule this project runs on: describe what the code actually does.
