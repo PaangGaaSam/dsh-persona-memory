@@ -1,20 +1,20 @@
 # dsh-persona-memory — 项目状态（交接用）
 
-> 更新时间：2026-11-10 晚。当前版本：**0.2.1**（宿主已加载并实测）。
-> compact 后请先读这一份；代码、数据、决策、坑、遗留都在这里。
+> 更新时间：**2026-11-10 17:50**。当前版本：**0.2.4**（31 项测试全过，**待重启生效**）。
+> compact 后先读 **§0 → §1 → §16（交接速览）**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§15 是之后发生的事。
 
 ---
 
 ## 0. 一句话
 
-DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 → 增量维护**用户画像**（profile.md）与**助手性格**（persona.md，按证据累积定型）→ 每轮对话注入 → 自带设置页可看可调。
+DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 → 增量维护**用户画像**（profile.md）与**助手性格**（persona.md，按证据累积定型）→ 每轮对话注入 → 自带设置页可看可调。已发布到 GitHub，收录 PR 在审。
 
 ## 1. 当前状态
 
 - 包：`D:\dsh-persona-memory`；profile `desktop` 以 `link:` 安装（`dsh.profile.bundles` 含 `dsh-persona-memory`）。
-- 版本 **0.2.1**；重启后 `GET /persona-memory/status` 的 `status.version` 实测为 `0.2.1`。
-- 测试：`node test/run.mjs` → **30 项全过**；`node --check lib/*.js` 全过。
-- 设置页已在「设置 → 记忆与画像」实测出现并可操作（配色、通知、置顶、回滚都已人工验证）。
+- 版本 **0.2.4**（0.2.1 → 0.2.2 → 0.2.3 → 0.2.4 全在 11-10 当天完成）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
+- 测试：`node test/run.mjs` → **31 项全过**；`node --check lib/*.js` 全过。
+- 设置页已在「设置 → 记忆与画像」出现；配色/通知/置顶/回滚已人工验证。**待确认**：下拉框在 0.2.3 修完后是否还渲染异常（见 §16）。
 - 系统通知实测可弹；用户已打开 `notifyOnRun`。
 
 ## 2. 数据现状（2026-11-10 收尾）
@@ -181,3 +181,42 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 - 性格/画像两个 stage 都只吃 `observations`。
 
 所以它目前唯一的消费者是「人眼看设置页」。可选的三种走向见 2026-11-10 与用户的对话：删掉 / 次日喂回 stage2 / 注入上下文；**待用户决定**。
+
+## 16. 交接速览（compact 后先读这一节）
+
+### 今天（2026-11-10）一条时间线
+
+| 版本 | 事 | 状态 |
+|---|---|---|
+| 0.2.1 | 设置页空白按钮/输入框（用了不存在的 `--dsw-alias-bg-l1`）、通知开关卡片重复与闪烁、状态文案去毫秒 | 已验证 |
+| 0.2.2 | 设置页**有标签没控件**：`jsx(Field, props, child)` 把控件当成了 key（React 自动运行时第三个参数是 key）。修法全部改 `h()`；新增 `GET /persona-memory/models` 模型下拉；补 `personaCoreMinDates`/`personaDemoteAfterDays` | 已验证 |
+| 0.2.3 | 下拉框 `color-scheme: inherit` + `option` 显式配色；`validateDraft()` 按字段校验（越界红字 + 禁用保存 + submit 兜底）；每个字段加 `hint*` 说明 | **待用户确认下拉框渲染** |
+| 0.2.4 | `canonicalEvidence()`：证据 token 两端规范化，避免同一会话被算成两个（会绕过 3 会话晋升门槛） | 待重启 |
+
+### 发布进度
+
+- 仓库：<https://github.com/PaangGaaSam/dsh-persona-memory>（commit `98e17ef`，中英双 README，底部有求 star / 求反馈段）
+- 收录 PR：<https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/13895>（`add-persona-memory` 分支，1 file +6）
+- **当前 CI 状态**：`check` ✅ success；`Submission gate` ❌ 唯一原因「repository is 0.0 days old (needs 1)」。官方原文说会自动重跑、不要重新提交。**2026-11-11 16:08（北京）之后**应自行转绿。若没转绿，在 `PaangGaaSam/awesome-dsh-plugin` 的 `add-persona-memory` 分支推一个空提交即可重新触发。
+- 用户收到的「Submission gate 全部 job 失败」通知就是这个，已解释过，无需处理。
+
+### 三个未决事项（都有推荐，等用户拍板）
+
+1. **「延续待办」是死数据**（见 §15）：推荐**先不动**，等做周报时一起处理；不建议注入系统提示（与插件「不收任务进度」的设计原则冲突）。
+2. **周报**：暂缓，等 `daily/*.md` 攒够 3–5 天。计划 `weekly/YYYY-Www.md` + 设置页「本周」卡片，**不注入**每轮上下文。
+3. **向量库 / 知识库**：结论已定 —— 宿主 `app.asar` **没有** `ctx.llm.embed`（只有 `ctx.llm.stream`），上向量必须自备 embedding；建议 v0.3 先做**词法检索**（BM25/字符 bigram），不做向量；**知识库是独立插件**，不与性格绑定，只共用 `date/session-<id8>` 证据 token 作坐标系。
+
+### 操作约束（会重复踩的）
+
+- **改任何 `lib/*.js` 都要重启桌面端**，`status.version` 才会变。
+- `git push` 必须在 danger-full-access 下、且指定系统 ssh：`GIT_SSH_COMMAND='C:/Windows/System32/OpenSSH/ssh.exe -o StrictHostKeyChecking=accept-new'`。见 §12 环境坑。
+- 不要用 PowerShell `Set-Content`/`Out-File` 写 `~/.dsh/persona-memory/` 下的 JSON（会加 BOM，历史上把调度状态清空过）。
+- 沙箱 workspace-write 下跑不了 schannel/子进程相关的命令（curl、ssh、git push、凭据助手），这几类要一次性提权。
+- 测试里的假 `jsx` 会对「第三个参数是对象」直接抛错 —— 这是防 0.2.2 那个 bug 复发的护栏，别把它删了。
+
+### 验证 0.2.4 的步骤
+
+1. 重启桌面端 → 设置 → 记忆与画像 → 状态卡应显示 `v0.2.4`。
+2. 「计划与模型」应有 12 个输入框（2 个下拉）+ 4 个开关 + 1 个多行文本框，每个字段下面有一行灰字说明。
+3. 把温度填成 `9` → 应该红框 + 「范围 0–2」+ 保存按钮变灰。
+4. 看「最新日报」那段：`观察` 里的证据应是 `2026-11-10/session-xxxx` 形式（旧文件读取时已规范化）。
