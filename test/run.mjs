@@ -574,6 +574,24 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   assert.ok(rendered.some((text) => text.includes('无新证据降级（天）')), 'exposes the demote window')
   assert.ok(!rendered.some((text) => text.includes('{days}')), 'persona hint interpolates every placeholder')
 
+  // Validation and help text: the hint explains the knob, and a value outside the
+  // field's range shows a message and blocks saving instead of bouncing off the host.
+  const saveButton = () => elements.filter((element) => element.type === 'button' && element.props['data-primary'] === 'true').pop()
+  const numberInputs = () => elements.filter((element) => element.type === 'input' && element.props.type === 'number')
+  assert.ok(rendered.some((text) => text.includes('采样')), 'temperature carries an explanation')
+  numberInputs()[0].props.onChange({ target: { value: '9' } })
+  rendered.length = 0
+  elements.length = 0
+  render({ type: component, props: { t: translate } })
+  assert.ok(rendered.some((text) => text.includes('范围 0–2')), 'an out-of-range temperature is rejected')
+  assert.strictEqual(saveButton().props.disabled, true, 'saving is blocked while a field is invalid')
+  numberInputs()[0].props.onChange({ target: { value: '0.2' } })
+  rendered.length = 0
+  elements.length = 0
+  render({ type: component, props: { t: translate } })
+  assert.ok(!rendered.some((text) => text.includes('范围 0–2')), 'the message clears once the value is valid')
+  assert.strictEqual(saveButton().props.disabled, false)
+
   // The notification toggle must react immediately instead of waiting for the
   // round trip (that lag is what made the card flicker).
   const checkboxes = () => elements.filter((element) => element.type === 'input' && element.props.type === 'checkbox')
@@ -813,6 +831,7 @@ ok('client styles only reference theme tokens the host actually defines', () => 
     '--dsw-alias-border-l2',
     '--dsw-alias-state-business-primary',
     '--dsw-alias-label-primary-foreground',
+    '--dsw-alias-bg-layer-1',
     '--dsw-alias-bg-layer-2',
     '--dsw-alias-state-error-primary',
   ])

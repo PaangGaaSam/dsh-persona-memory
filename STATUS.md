@@ -152,3 +152,11 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 - 版本 **0.2.2**；30 项测试全过；**必须重启桌面端**，`status.version` 才会从 0.2.1 变 0.2.2。
 
 验证：重启 → 设置 → 记忆与画像 → 「计划与模型」卡片应有 12 个输入框（其中 2 个是下拉）+ 4 个开关 + 排除工作区文本框；状态卡的三个值应当可见。
+
+## 14. v0.2.3 —— 下拉框跟随配色、字段校验、逐项说明
+
+- **下拉框**：`.pm-select` 设 `color-scheme: inherit`（跟随宿主在 `<html>` 上解析出的 light/dark/system），并显式给 `option` 上 token 配色 + `bg-layer-1` 实底 + `padding-right:26px` 给原生箭头留位。宿主 `dsh-client-ui-theme` 的呈现器本来就会写 `html{color-scheme}`（见 `app.asar` 493527 行），所以 `inherit` 等于「跟应用主题一致」，主题设成 system 时就是跟随系统。**若仍不对，下一步换成自绘下拉**（不依赖原生 popup）。
+- **校验**：`validateDraft()` 按字段校验，规则集中在 `FIELDS` 表；错误显示在控件下方、`data-invalid` 变红边、**保存按钮禁用**，`submit()` 里再兜一次（防回车提交）。范围：schedule `^([01]\d|2[0-3]):[0-5]\d$`（与服务端 `parseTimeOfDay` 一致）、temperature 0–2 小数、windowHours 1–168、budget 0–20000、sessionLimit 200–100000、maxSessions 1–100、personaEvery 1–90、evidence 1–20、coreDates 1–20、demote 1–365。
+- **说明文字**：每个字段一行 `hint*`，讲清作用与建议值；温度那条明确写了「0–2、摘要建议 0.1–0.3、作用在三段调用（会话卡片/日报/性格合并）」，并在无效时与错误共存展示。
+- 12 个字段改为 `FIELDS` 表驱动渲染，新增键只需加一行。
+- 版本 **0.2.3**；30 项测试全过（新增：hint 渲染、越界报错、保存被禁用、改正后恢复）；**必须重启桌面端**。
