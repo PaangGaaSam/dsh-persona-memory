@@ -11,6 +11,7 @@ import {
   appendLockedEntry,
   applyPersonaSuggestions,
   applySuggestions,
+  canonicalEvidence,
   emptyProfile,
   evidenceStats,
   formatEvidence,
@@ -851,6 +852,30 @@ ok('evidence tokens survive the separators models actually emit', () => {
   assert.deepStrictEqual(evidenceStats(tokens), { sessions: 3, dates: 2 })
   assert.deepStrictEqual(parseEvidence('用户口述'), [{ date: '', session: '用户口述' }])
   assert.deepStrictEqual(evidenceStats(parseEvidence('')), { sessions: 0, dates: 0 })
+})
+
+ok('evidence is canonicalised so one session never counts twice', () => {
+  // Shapes the model has actually echoed back: a turn suffix, a raw uuid
+  // fragment, and a normal handle.
+  assert.strictEqual(
+    canonicalEvidence('2026-11-10/session-7b3c4fb6-5、2026-11-10/c7653975-4416-4523; 2026-11-11/session-8034214a-9'),
+    '2026-11-10/session-7b3c4fb6、2026-11-10/session-c7653975、2026-11-11/session-8034214a',
+  )
+  // Two turns of the same session must collapse: otherwise one conversation
+  // looks like the evidence threshold has been met.
+  assert.strictEqual(canonicalEvidence('2026-11-10/session-7b3c4fb6-5、2026-11-10/session-7b3c4fb6-9'), '2026-11-10/session-7b3c4fb6')
+  assert.deepStrictEqual(
+    evidenceStats(parseEvidence(canonicalEvidence('2026-11-10/session-7b3c4fb6-5、2026-11-10/session-7b3c4fb6-9'))),
+    { sessions: 1, dates: 1 },
+  )
+  // Free text has no session to rewrite and must survive untouched.
+  assert.strictEqual(canonicalEvidence('用户口述'), '用户口述')
+  assert.strictEqual(canonicalEvidence(''), '')
+  // A legacy daily note is healed on read, not only on the next write.
+  const legacy = ['# 2026-11-10', '', '## 观察', '- [style] 用户沟通极简（证据：2026-11-10/session-7b3c4fb6-5; 2026-11-10/c7653975-4416-4523 · 0.85）', ''].join('\n')
+  const [observation] = parseDailyObservations(legacy)
+  assert.strictEqual(observation.evidence, '2026-11-10/session-7b3c4fb6、2026-11-10/session-c7653975')
+  assert.strictEqual(observation.confidence, 0.85)
 })
 
 ok('stage1: cites resolve to the cited turn date, not the run date', () => {

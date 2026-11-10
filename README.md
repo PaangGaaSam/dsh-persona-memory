@@ -42,6 +42,8 @@ Two rules keep it honest:
 
 Evidence is `date/session` tokens (`2026-11-10/session-7b3c4fb6`), and the date comes from the **cited turn** (`[#n]` in the stage-1 prompt) rather than the run, so a session that spans midnight is dated correctly. The persona stage also reads the last `personaUpdateEveryDays` daily notes, so evidence can cross days.
 
+Evidence is **canonicalised on the way in and on the way out**: whatever the model echoes back — a turn-qualified handle (`session-7b3c4fb6-5`) or a raw uuid fragment (`c7653975-4416-4523`) — is rewritten to `session-<8 hex>` and deduplicated. Otherwise two turns of one conversation would look like two sessions and clear the promotion threshold by itself. Legacy daily notes are healed when read, so an older note cannot poison the count.
+
 ## Settings page
 
 The plugin ships a browser half (`dsh.client`) that registers a **记忆与画像 / Memory & persona** section in the host settings. It shows the run status, lets you edit the schedule, model, budget and scope, run the digest (optionally forcing a persona merge), pin or unpin individual entries, restore a pre-write backup, and read the latest daily note.
