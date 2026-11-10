@@ -1,0 +1,6 @@
+﻿# dsh-persona-memory bundle patch (plain insert row: hot-mountable).
+# Tunable config lives in lib/index.js DEFAULTS; override it with your own row in
+# the profile cordis.patch.yml when needed.
+- insert:
+    - id: persona-memory
+      name: 'dsh-persona-memory'
