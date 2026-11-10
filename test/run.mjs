@@ -15,14 +15,17 @@ import {
   emptyProfile,
   evidenceStats,
   formatEvidence,
+  isSelfNarrative,
   parseEvidence,
   parseProfile,
   PERSONA_SECTIONS,
   PROFILE_SECTIONS,
   renderForInjection,
+  renderPersonaInjection,
   setPinned,
 } from '../lib/profile.js'
-import { extractJson, parseCard, parseDaily, parseDailyObservations, parsePersonaSuggestions, parseSuggestions, runDigest } from '../lib/digest.js'
+import { extractJson, parseCard, parseDaily, parseDailyObservations, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest } from '../lib/digest.js'
+import { PERSONA_HEADING } from '../lib/inject.js'
 import { resolveDshHome } from '../lib/util.js'
 
 let passed = 0
@@ -100,10 +103,10 @@ ok('pin and locked notes preserve the document version', () => {
 ok('persona document keeps its own sections', () => {
   const text = emptyProfile(PERSONA_SECTIONS, '助手性格')
   const merged = applySuggestions(text, PERSONA_SECTIONS, [
-    { section: 'core', text: '直接、不绕弯', confidence: 0.6, evidence: '2026-11-05/session-e' },
+    { section: 'core', text: '我判断先跑测试再重启（当时刚踩过一次坑）', confidence: 0.6, evidence: '2026-11-05/session-e' },
   ], { date: '2026-11-05' })
-  assert.ok(merged.text.includes('## 核心性格'))
-  assert.ok(merged.text.includes('直接、不绕弯'))
+  assert.ok(merged.text.includes('## 我认为我是谁'))
+  assert.ok(merged.text.includes('先跑测试再重启'))
 })
 
 const home = resolveDshHome()
@@ -205,13 +208,19 @@ if (fs.existsSync(sessionsRoot)) {
         const system = options.messages[0].content[0].text
         let out
         if (system.includes('会话抽取器')) {
-          out = JSON.stringify({ topic: '测试主题', userNeeds: ['要一个插件'], observations: [{ kind: 'style', text: '喜欢先给结论再展开细节', confidence: 0.8 }], unresolved: ['重启后验证'] })
+          out = JSON.stringify({
+            topic: '测试主题',
+            userNeeds: ['要一个插件'],
+            observations: [{ kind: 'style', text: '喜欢先给结论再展开细节', confidence: 0.8 }],
+            self: [{ event: '他要求先验证再重启', judgment: '我认为重启前该先跑一遍测试', confidence: 0.7 }],
+            unresolved: ['重启后验证'],
+          })
         } else if (system.includes('日记作者')) {
           out = JSON.stringify({ summary: ['完成了 v0.1 骨架'], unresolved: ['重启后验证'], observations: [{ kind: 'style', text: '喜欢直接看到结果', confidence: 0.7 }] })
         } else if (system.includes('用户画像编辑')) {
           out = JSON.stringify({ add: [{ kind: 'style', text: '喜欢先给结论再展开细节', confidence: 0.8, evidence: '2026-11-10/s' }] })
         } else {
-          out = JSON.stringify({ add: [{ section: 'core', text: '直接、不绕弯', confidence: 0.6, evidence: '2026-11-10/s' }] })
+          out = JSON.stringify({ add: [{ section: 'core', text: '我第一次接手这个插件时想先跑测试再重启，所以现在默认先验证', confidence: 0.6, evidence: '2026-11-10/s' }] })
         }
         yield { type: 'text', text: out }
       },
@@ -221,9 +230,15 @@ if (fs.existsSync(sessionsRoot)) {
     const report = await runDigest(ctx, config, paths, state, () => {})
     assert.ok(report.skipped === false)
     assert.ok(fs.existsSync(report.daily))
-    assert.ok(fs.readFileSync(report.daily, 'utf8').includes('完成了 v0.1 骨架'))
+    const note = fs.readFileSync(report.daily, 'utf8')
+    assert.ok(note.includes('完成了 v0.1 骨架'))
+    // The assistant's own judgment must be persisted, or the persona window can
+    // never see evidence from an earlier day.
+    assert.ok(note.includes('## 我的判断'))
+    assert.ok(note.includes('他要求先验证再重启 → 我认为重启前该先跑一遍测试'))
     assert.ok(fs.readFileSync(paths.profileFile, 'utf8').includes('喜欢先给结论再展开细节'))
-    assert.ok(fs.readFileSync(paths.personaFile, 'utf8').includes('直接、不绕弯'))
+    const persona = fs.readFileSync(paths.personaFile, 'utf8')
+    assert.ok(persona.includes('我第一次接手这个插件时想先跑测试再重启'))
     const now = new Date()
     const localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     assert.strictEqual(state.lastPersonaRunDay, localDay)
@@ -990,6 +1005,141 @@ ok('daily notes feed the persona window', () => {
   assert.strictEqual(rows[0].evidence, '2026-11-09/session-a')
   assert.strictEqual(rows[0].confidence, 0.8)
   assert.ok(!rows.some((row) => row.text.includes('摘要一行')))
+})
+
+ok('stage1: my own judgments never leak into the user observations', () => {
+  const session = {
+    id: 'abcd1234-ef56',
+    cwd: 'C:\\w',
+    messages: [
+      { role: 'user', text: '别自作主张', time: Date.parse('2026-11-10T10:00:00') },
+      { role: 'user', text: '先跑测试再重启', time: Date.parse('2026-11-10T10:05:00') },
+    ],
+  }
+  const card = parseCard({
+    observations: [{ kind: 'correction', text: '不喜欢助手自作主张', cites: [1] }],
+    self: [{ event: '他要求先跑测试再重启', judgment: '我认为该先复现再改', confidence: 0.7, cites: [2] }],
+  }, session, '2026-11-10')
+  assert.deepStrictEqual(card.observations.map((item) => item.text), ['不喜欢助手自作主张'])
+  assert.strictEqual(card.self.length, 1)
+  assert.strictEqual(card.self[0].event, '他要求先跑测试再重启')
+  assert.strictEqual(card.self[0].judgment, '我认为该先复现再改')
+  assert.strictEqual(card.self[0].evidence, '2026-11-10/session-abcd1234')
+  // stage3 only ever reads `observations`, so `self` cannot reach the profile.
+  const profileInput = card.observations.flatMap((item) => [item.text])
+  assert.ok(!profileInput.some((text) => text.includes('我认为')))
+})
+
+ok('daily notes: 我的判断 is read back and counts toward cross-day evidence', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-judge-'))
+  const now = new Date()
+  const dayKey = (offset) => {
+    const d = new Date(now.getTime() - offset * 86400000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const handles = ['aaaa1111', 'bbbb2222', 'cccc3333']
+  for (const offset of [0, 1, 2]) {
+    const day = dayKey(offset)
+    const text = renderDaily(day, { summary: ['一行摘要'], observations: [], unresolved: [] }, [
+      { event: '他又改同一处代码', judgment: '我认为该先问验收标准', confidence: 0.6, evidence: `${day}/session-${handles[offset]}` },
+    ])
+    assert.ok(text.includes('## 我的判断'))
+    assert.ok(text.includes('- 他又改同一处代码 → 我认为该先问验收标准'))
+    fs.writeFileSync(path.join(dir, `${day}.md`), text)
+  }
+  const rows = readRecentDailyObservations({ dailyDir: dir }, 7).filter((row) => row.kind === 'self')
+  assert.strictEqual(rows.length, 3, 'three days of judgments come back')
+  assert.strictEqual(rows[0].event, '他又改同一处代码')
+  assert.strictEqual(rows[0].judgment, '我认为该先问验收标准')
+  // Without this the self window could never reach 3 sessions on 3 dates.
+  assert.deepStrictEqual(
+    evidenceStats(rows.flatMap((row) => parseEvidence(row.evidence))),
+    { sessions: 3, dates: 3 },
+  )
+})
+
+ok('renderDaily never invents an evidence token', () => {
+  const note = renderDaily('2026-11-10', { summary: [], observations: [], unresolved: [] }, [
+    { event: '', judgment: '我倾向于先复现', evidence: '' },
+  ])
+  assert.ok(note.includes('- 我倾向于先复现'))
+  assert.ok(!note.includes('证据：'))
+  const rows = parseDailyObservations(note).filter((row) => row.kind === 'self')
+  assert.strictEqual(rows.length, 1)
+  assert.strictEqual(rows[0].event, '')
+  assert.strictEqual(rows[0].evidence, '')
+  // The `- （无）` placeholder of an empty section must not come back as a judgment:
+  // it would sail past the "no judgments yet, skip" guard in the persona stage.
+  const empty = renderDaily('2026-11-10', { summary: [], observations: [], unresolved: [] }, [])
+  assert.strictEqual(parseDailyObservations(empty).filter((row) => row.kind === 'self').length, 0)
+})
+
+ok('persona: a self-description without a traceable event stays a candidate', () => {
+  const rule = { date: '2026-11-10', styleMinSessions: 3, coreMinSessions: 3, coreMinDates: 3, demoteAfterDays: 30 }
+  const result = applyPersonaSuggestions(emptyProfile(PERSONA_SECTIONS, '助手性格'), PERSONA_SECTIONS, [
+    { section: 'core', text: '我是个直接的人', confidence: 0.9, evidence: '' },
+  ], rule)
+  const sections = parseProfile(result.text, PERSONA_SECTIONS)
+  assert.strictEqual(sections.get('core').length, 0, 'no event, no promotion')
+  assert.strictEqual(sections.get('candidate').length, 1)
+  assert.strictEqual(renderPersonaInjection(result.text, PERSONA_SECTIONS, PERSONA_HEADING, 500), '', 'candidates are never injected')
+})
+
+ok('persona: third-person stage directions never reach the prompt', () => {
+  assert.strictEqual(isSelfNarrative('助手应保持简洁'), false)
+  assert.strictEqual(isSelfNarrative('我认为助手应该在改代码前先复现'), false)
+  assert.strictEqual(isSelfNarrative(''), false)
+  assert.strictEqual(isSelfNarrative('我上次先给结论是对的'), true)
+
+  const rule = { date: '2026-11-10', styleMinSessions: 3, coreMinSessions: 3, coreMinDates: 3, demoteAfterDays: 30 }
+  let text = emptyProfile(PERSONA_SECTIONS, '助手性格')
+  for (const session of ['session-a', 'session-b', 'session-c']) {
+    text = applyPersonaSuggestions(text, PERSONA_SECTIONS, [
+      { section: 'style', text: '助手应保持简洁', confidence: 0.8, evidence: `2026-11-10/${session}` },
+    ], rule).text
+  }
+  assert.strictEqual(parseProfile(text, PERSONA_SECTIONS).get('style').length, 1, 'evidence still decides the section')
+  assert.strictEqual(renderPersonaInjection(text, PERSONA_SECTIONS, PERSONA_HEADING, 800), '', 'a script line stays in the file, not in the prompt')
+
+  text = applyPersonaSuggestions(text, PERSONA_SECTIONS, [
+    {
+      section: 'core',
+      text: '他第二次让我删掉铺垫时，我意识到先给结论更省他时间，所以我现在的默认是先说结果',
+      confidence: 0.9,
+      evidence: '2026-11-11/session-d、2026-11-12/session-e、2026-11-13/session-f',
+    },
+  ], { ...rule, date: '2026-11-13' }).text
+  const injection = renderPersonaInjection(text, PERSONA_SECTIONS, PERSONA_HEADING, 800)
+  assert.ok(injection.startsWith(PERSONA_HEADING))
+  assert.ok(injection.includes('先给结论更省他时间'))
+  assert.ok(!injection.includes('助手应保持简洁'))
+  assert.ok(!/\n- \[/.test(injection), 'no section tags in the persona block')
+  assert.ok(!injection.includes('证据：'), 'no evidence tokens in the persona block')
+})
+
+ok('persona: renaming the headings does not drop existing entries', () => {
+  const legacy = [
+    '---', 'version: 3', 'updatedAt: 2026-11-01T00:00:00.000Z', 'title: 助手性格', '---', '',
+    '## 核心性格',
+    '- [core-1] [置信度 0.80] 回答先给结论（证据：2026-11-01/session-a、2026-11-02/session-b、2026-11-03/session-c）',
+    '',
+    '## 相处风格',
+    '- [pstyle-1] [置信度 0.70] 少铺垫（证据：2026-11-01/session-a）',
+    '',
+    '## 候选观察', '',
+  ].join('\n')
+  const state = parseProfile(legacy, PERSONA_SECTIONS)
+  assert.strictEqual(state.get('core').length, 1)
+  assert.strictEqual(state.get('style').length, 1)
+  assert.ok(state.get('core')[0].evidence.includes('2026-11-03/session-c'))
+
+  const migrated = applyPersonaSuggestions(legacy, PERSONA_SECTIONS, [], { date: '2026-11-10' })
+  assert.ok(migrated.text.includes('## 我认为我是谁'))
+  assert.ok(!migrated.text.includes('## 核心性格'))
+  assert.ok(migrated.text.includes('\nversion: 3\n'), 'migration must not reset the version')
+  const after = parseProfile(migrated.text, PERSONA_SECTIONS)
+  assert.strictEqual(after.get('core').length, 1)
+  assert.strictEqual(after.get('style').length, 1)
 })
 
 await Promise.all(pending)

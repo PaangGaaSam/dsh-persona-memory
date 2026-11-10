@@ -19,28 +19,32 @@ Requirements: DSH desktop with the `web` client platform (the settings page is a
 ## What it does
 
 1. **Every day at 17:00** (configurable) it reads all session logs under `$DSH_HOME/sessions` (every workspace, every session in the window), including multi-frame zstd logs.
-2. **Stage 1** — one card per session: topic, user needs, observations (preference / style / thinking / correction / friction), unresolved items.
-3. **Stage 2** — merges the cards into `persona-memory/daily/YYYY-MM-DD.md`.
+2. **Stage 1** — one card per session: topic, user needs, observations (preference / style / thinking / correction / friction), **my own judgments**, unresolved items.
+3. **Stage 2** — merges the cards into `persona-memory/daily/YYYY-MM-DD.md`; my judgments are copied verbatim into `## 我的判断` instead of being rephrased by the model.
 4. **Stage 3** — turns observations into profile suggestions, then merges them into `profile.md` (near-duplicate detection, evidence chains, pinned entries protected).
-5. **Weekly** — consolidates observations into `persona.md` (core / style / candidates) with the same evidence rules.
-6. **Every prompt** — a `persona-memory` system-prompt section renders pinned + recent entries under a character budget (default 1200 chars, 70/30 profile/persona).
+5. **Weekly** — takes only my own judgments as material, writes them in the first person, and consolidates them into `persona.md` (我认为我是谁 / 我和你相处时的样子 / 还没想清楚的) with the same evidence rules.
+6. **Every prompt** — a `persona-memory` system-prompt section renders pinned + recent entries under a character budget (default 1200 chars, 70/30 profile/persona). The persona part carries first-person self-accounts only.
 
 ## How the personality settles
 
-The companion personality forms over time, not on first use. Every observation lands in **候选观察** first; the plugin then moves entries by **evidence**, never by what the model claims:
+The personality is not a setting — it is an account of myself formed in conversation, where every line traces back to what actually happened on some day and what I concluded from it. Stage 1 therefore records a second list next to the **user** observations: **`self`, my own judgment at the time** (`observations` only feeds the profile, `self` only feeds the personality; the two never mix).
+
+**First person, and not a script.** The prompt requires each line to run *what happened → what I thought → so what I lean towards now*, forbids third-person stage directions (`the assistant should…`), and forbids performance adjectives like tone, humour or forms of address. A code gate backs it up: a line without 「我」, or one that still reads as a stage direction, stays in the file but never reaches the prompt. An older `persona.md` is all script, so after the upgrade the layer goes **quiet for a while** (no old entries injected) until new self-accounts accumulate evidence — that is expected, not broken.
+
+Self-accounts land in **还没想清楚的** first; the plugin then moves entries by **evidence**, never by what the model claims:
 
 | Section | Promoted when |
 |---|---|
-| 候选观察 | default landing place for anything observed |
-| 相处风格 (style) | `personaMinEvidence` distinct sessions (default 3) — a single day may qualify |
-| 核心性格 (core) | the same session count **and** `personaCoreMinDates` distinct dates (default 3) |
+| 还没想清楚的 (candidate) | default landing place for any self-account; **never injected** |
+| 我和你相处时的样子 (style) | `personaMinEvidence` distinct sessions (default 3) — a single day may qualify |
+| 我认为我是谁 (core) | the same session count **and** `personaCoreMinDates` distinct dates (default 3) |
 
 Two rules keep it honest:
 
-- **Supersede** — when a new observation contradicts a settled entry the model names it (`supersedes: "<id>"`); that entry's confidence drops by 0.3 and it returns to candidates instead of coexisting with its opposite.
+- **Supersede** — when a new self-account contradicts a settled entry the model names it (`supersedes: "<id>"`); that entry's confidence drops by 0.3 and it returns to candidates instead of coexisting with its opposite. Taking yourself back is encouraged: if last time's reasoning no longer holds, say why.
 - **Decay** — an entry without new evidence for `personaDemoteAfterDays` (default 30) steps back to candidates. Nothing is deleted; pinned and user-locked entries never move.
 
-Evidence is `date/session` tokens (`2026-11-10/session-7b3c4fb6`), and the date comes from the **cited turn** (`[#n]` in the stage-1 prompt) rather than the run, so a session that spans midnight is dated correctly. The persona stage also reads the last `personaUpdateEveryDays` daily notes, so evidence can cross days.
+Evidence is `date/session` tokens (`2026-11-10/session-7b3c4fb6`), and the date comes from the **cited turn** (`[#n]` in the stage-1 prompt) rather than the run, so a session that spans midnight is dated correctly. The persona stage also reads the `## 我的判断` section of the last `personaUpdateEveryDays` daily notes, so self-evidence can cross days; renaming that heading would keep the cross-day count at zero and the core section forever empty.
 
 Evidence is **canonicalised on the way in and on the way out**: whatever the model echoes back — a turn-qualified handle (`session-7b3c4fb6-5`) or a raw uuid fragment (`c7653975-4416-4523`) — is rewritten to `session-<8 hex>` and deduplicated. Otherwise two turns of one conversation would look like two sessions and clear the promotion threshold by itself. Legacy daily notes are healed when read, so an older note cannot poison the count.
 
@@ -74,9 +78,9 @@ The run record itself carries the outcome (`profile`, `persona`, `skipped`, `err
 ```
 $DSH_HOME/persona-memory/
 ├── profile.md            # user profile (single source of truth)
-├── persona.md            # companion personality
+├── persona.md            # my self-account (first person; old headings are read and rewritten)
 ├── config.json           # settings-page overrides (optional)
-├── daily/YYYY-MM-DD.md   # daily digests
+├── daily/YYYY-MM-DD.md   # summary / observations / my judgments / follow-ups
 ├── history/              # backup before every rewrite: profile-<date>-<ms>.md
 ├── state.json            # scheduler state
 └── logs/run-YYYY-MM-DD.jsonl
