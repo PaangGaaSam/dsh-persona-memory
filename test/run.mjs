@@ -46,7 +46,7 @@ import {
 import { extractJson, extractJsonReport, lessonsStage, parseCard, parseDaily, parseDailyObservations, parseLessonSuggestions, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites, detectConsequenceSignals } from '../lib/digest.js'
 import { formatReport } from '../lib/report.js'
 import { PERSONA_HEADING, buildSectionText, planBudget, renderLayers } from '../lib/inject.js'
-import { resolveDshHome } from '../lib/util.js'
+import { normalizeTimeText, parseTimeOfDay, resolveDshHome } from '../lib/util.js'
 
 let passed = 0
 const pending = []
@@ -385,6 +385,31 @@ ok('config: overrides win over the patch row and only editable keys persist', ()
   assert.strictEqual(exposed.values.personaCoreMinDates, 3)
 })
 
+ok('util: a full-width time is accepted, malformed times are still refused', () => {
+  assert.strictEqual(parseTimeOfDay('23：00'), 1380)
+  assert.strictEqual(parseTimeOfDay('２３：００'), 1380)
+  assert.strictEqual(parseTimeOfDay(' ２３:00 '), 1380, 'surrounding whitespace is trimmed')
+  assert.strictEqual(parseTimeOfDay('23:0'), undefined)
+  assert.strictEqual(parseTimeOfDay('23'), undefined)
+  assert.strictEqual(parseTimeOfDay('23:00:00'), undefined)
+  // Only the full-width colon and digits are folded — the same-looking cousins
+  // must keep failing instead of quietly becoming a time.
+  assert.strictEqual(parseTimeOfDay('23.00'), undefined)
+  assert.strictEqual(parseTimeOfDay('23；00'), undefined)
+  assert.strictEqual(parseTimeOfDay('23点00'), undefined)
+  assert.strictEqual(parseTimeOfDay('２５：００'), undefined, 'the range still applies after folding')
+  assert.strictEqual(normalizeTimeText(' ２３：０５ '), '23:05')
+  assert.strictEqual(normalizeTimeText(undefined), '')
+  // A hand-edited config.json in full-width form resolves, and an invalid one
+  // still refuses to be written.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-fullwidth-'))
+  const file = path.join(dir, 'config.json')
+  const saved = saveOverrides(file, {}, {}, { schedule: '２３：００' })
+  assert.strictEqual(saved.config.scheduleMinutes, 1380)
+  assert.strictEqual(JSON.parse(fs.readFileSync(file, 'utf8')).schedule, '２３：００')
+  assert.throws(() => saveOverrides(file, {}, loadOverrides(file), { schedule: '２５：００' }), /schedule/)
+})
+
 ok('run records keep the outcome for the completion banner', async () => {
   const { recordRun } = await import('../lib/state.js')
   const state = { runs: [] }
@@ -512,6 +537,67 @@ ok('http: readJsonBody accepts JSON, rejects junk, treats an empty body as {}', 
   assert.strictEqual(parsed.patch.model, 'm')
   await assert.rejects(() => readJsonBody(Readable.from([Buffer.from('not json')])), /must be JSON/)
   assert.deepStrictEqual(await readJsonBody(Readable.from([])), {})
+})
+
+ok('client: seedDraft maps config values to a draft and mutates nothing', () => {
+  const code = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  let entry
+  globalThis.window = { __ModuleLoader__: { load: (registered) => { entry = registered } } }
+  new Function('window', code)(globalThis.window)
+  delete globalThis.window
+  // No rendering happens in this check, so the react stubs are never called —
+  // which is the point of `seedDraft` living outside the component.
+  const noop = () => null
+  const client = entry.factory((id) => (id === 'react'
+    ? { useState: noop, useEffect: noop, useCallback: noop, useMemo: noop, useRef: noop }
+    : { jsx: noop, jsxs: noop, Fragment: null }))
+  const values = {
+    schedule: '２３：３０',
+    model: 'deepseek-v4-pro',
+    provider: 'deepseek-account',
+    temperature: 0.7,
+    windowHours: 24,
+    promptBudgetChars: 1200,
+    sessionCharLimit: 3000,
+    maxSessionsPerRun: 5,
+    personaUpdateEveryDays: 7,
+    personaMinEvidence: 3,
+    personaCoreMinDates: 3,
+    personaDemoteAfterDays: 30,
+    autoApply: true,
+    personaEnabled: false,
+    keepRaw: true,
+    excludeWorkspaces: ['C:\\a', 'C:\\b'],
+  }
+  const snapshot = JSON.stringify(values)
+  const draft = client.seedDraft(values)
+  assert.deepStrictEqual(draft, {
+    schedule: '23:30',
+    model: 'deepseek-v4-pro',
+    provider: 'deepseek-account',
+    temperature: '0.7',
+    windowHours: '24',
+    promptBudgetChars: '1200',
+    sessionCharLimit: '3000',
+    maxSessionsPerRun: '5',
+    personaUpdateEveryDays: '7',
+    personaMinEvidence: '3',
+    personaCoreMinDates: '3',
+    personaDemoteAfterDays: '30',
+    autoApply: true,
+    personaEnabled: false,
+    keepRaw: true,
+    excludeWorkspaces: 'C:\\a\nC:\\b',
+  })
+  assert.strictEqual(JSON.stringify(values), snapshot, 'the values object is never mutated')
+  assert.deepStrictEqual(client.seedDraft(values), draft, 'same input, same draft')
+  assert.notStrictEqual(client.seedDraft(values), draft, 'a fresh object every time')
+  // A missing payload still yields a complete, renderable draft.
+  const empty = client.seedDraft(undefined)
+  assert.strictEqual(empty.schedule, '')
+  assert.strictEqual(empty.autoApply, false)
+  assert.strictEqual(client.seedDraft(null).excludeWorkspaces, '')
+  assert.strictEqual(client.normalizeTimeText(' ２３：００ '), '23:00')
 })
 
 ok('client bundle registers a settings section and renders the loaded panel', async () => {
@@ -689,17 +775,37 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   }
   const fetchCalls = []
   let currentPayload = payload
+  // Set by a test to freeze the status response for one call, so a render can be
+  // pumped exactly where the browser does one (between two awaits of `save()`).
+  let holdStatus = false
+  let releaseStatus = null
   const modelsPayload = {
     ok: true,
     providers: [{ id: 'deepseek-account', name: 'DeepSeek' }],
     models: { 'deepseek-account': [{ id: 'deepseek-flash', name: 'deepseek-flash' }, { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] },
   }
   globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
+    const method = init?.method ?? 'GET'
+    fetchCalls.push({ url, method, body: init?.body })
     // The panel asks for the model catalogue separately so a slow provider never
     // delays the form; answer it like the host does.
     if (String(url).endsWith('/persona-memory/models')) {
       return { ok: true, status: 200, text: async () => JSON.stringify(modelsPayload) }
+    }
+    // Saving behaves like the host: the patch lands and the next status read
+    // reflects it. Without that, a save could never be seen to change anything.
+    if (method === 'POST' && String(url).endsWith('/persona-memory/config')) {
+      const patch = JSON.parse(init.body).patch
+      const values = { ...currentPayload.status.config.values, ...patch }
+      currentPayload = {
+        ...currentPayload,
+        status: { ...currentPayload.status, schedule: values.schedule, config: { ...currentPayload.status.config, values } },
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, values, defaults: currentPayload.status.config.defaults }) }
+    }
+    if (holdStatus && String(url).endsWith('/persona-memory/status')) {
+      holdStatus = false
+      await new Promise((resolve) => { releaseStatus = resolve })
     }
     return { ok: true, status: 200, text: async () => JSON.stringify(currentPayload) }
   }
@@ -904,6 +1010,44 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   render({ type: component, props: { t: translate } })
   const optimistic = checkboxes()[checkboxes().length - 1]
   assert.strictEqual(optimistic.props.checked, true, 'the toggle flips before the request settles')
+
+  // ── saving must leave the saved value in the form ─────────────────────────
+  // The bug: `save()` cleared the draft, the render that followed re-seeded it
+  // from the *old* status, and the reload could then never refill it. The browser
+  // renders between the two awaits on its own, so the harness has to pump one
+  // there — otherwise the empty window that caused it is invisible here.
+  const scheduleInput = () => elements.find((element) => element.type === 'input' && element.props.placeholder === '17:00')
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(scheduleInput().props.value, '17:00', 'the form starts from the stored value')
+  scheduleInput().props.onChange({ target: { value: '23:30' } })
+  rerender()
+  assert.strictEqual(scheduleInput().props.value, '23:30', 'the field follows the keystroke')
+
+  holdStatus = true
+  saveButton().props.onClick()
+  await settle()
+  rerender()
+  assert.ok(scheduleInput() !== undefined, 'the form is still rendered while the save is in flight')
+  assert.strictEqual(scheduleInput().props.value, '23:30', 'it is never emptied while the save is in flight')
+  releaseStatus()
+  await settle()
+  rerender()
+  assert.strictEqual(scheduleInput().props.value, '23:30', 'the form shows the saved time afterwards')
+  assert.notStrictEqual(scheduleInput().props.value, '17:00', 'never the value that was on screen before the save')
+
+  // Regression: a non-time field goes through exactly the same path.
+  numberInputs()[0].props.onChange({ target: { value: '0.7' } })
+  rerender()
+  saveButton().props.onClick()
+  await settle()
+  rerender()
+  assert.strictEqual(numberInputs()[0].props.value, '0.7', 'the saved temperature is what the field shows')
+
+  // A full-width time is folded while typing, so what the user sees is what saves.
+  scheduleInput().props.onChange({ target: { value: '２３：４５' } })
+  rerender()
+  assert.strictEqual(scheduleInput().props.value, '23:45', 'the full-width colon is normalised as it is typed')
+  assert.strictEqual(saveButton().props.disabled, false, 'the normalised value is valid, so saving is allowed')
 
   // ── lessons: a separate card, human actions only ──────────────────────────
   currentPayload = payload
