@@ -504,3 +504,58 @@ persona: +5 ~0 ↑0 ↓0 x0 (v3)          ← 第一次就解析成功，没走�
 - 宿主是否每轮重建系统提示词尚未确认（`dsh-system-prompt` 在 `app.asar` 里，没读到源码）。`buildSectionText` 先取上下文 `cwd`，取不到用宿主进程 cwd：**全局教训总注入，工作区教训可能不注入**。这是保守取舍。
 - 冲突检测是机械扫描，会漏掉换个说法的相反条目；标错不删任何东西。
 - 教训不做历史回填，从启用开始积累。
+
+## 23. v0.3.1 —— 教训解析丢条 + 静默失败（0.3.0 首次实跑的第二个真 bug）
+
+### 现场（2026-11-11 17:00 那次日更）
+
+日志 `logs/run-2026-11-11.jsonl` 倒数几行：
+
+```
+[info] lessons raw: {"add":[{"section":"exp","text":"用户报告看不到屏幕的 UI 渲染问题时...（半句中间结束）
+[info] lessons: +0 ?0 ~0 x0 expired=0 dropped=0 (v0)
+[info] digest done sessions=7 cards=7
+```
+
+模型给了 8 条合法教训，**一条都没进池**，`lessons.md` 没生成，整次运行报告「成功」。
+
+### 根因（已复现，不是猜）
+
+1. 那条 raw 只有 **1437 个字符**，比日志 1500 的上限还短 —— 不是日志截断，是模型侧响应本身就残。
+2. `extractJson` 整体 JSON 不闭合 → 走容错分支，抓到了**里层的单个条目对象**。
+3. `parseLessonSuggestions` 只认 `add / lessons / suggestions`，拿到条目对象后 `asArray(undefined) → []`。
+4. `lessonsStage` 返回空数组，计数全 0；只有 `+0` 那一行 info 留着，「看着像没事」。
+
+### 改动（只动教训链路）
+
+| 位置 | 改动 |
+|---|---|
+| `parseLessonSuggestions` | `json` 本身是条目（含 `text` 或 `invalidates`）→ 当 `[json]` 处理。`extractJson` 的全局返回类型不动，stage1/2/3、persona、identity 的语义一字节没变 |
+| `extractJsonReport(text)` | 新增，`→ {value, complete}`；`complete:false` = 整体解析失败、`value` 来自容错内层。`extractJson` 变成 `extractJsonReport(text).value`，行为不变 |
+| `lessonsStage` | 用 `extractJsonReport`；`complete === false` 时写一条 **warn**：`lessons truncated: 1437 chars in 140032ms, kept 1 suggestion(s)`，并返回 `truncated: true`。残片里完整的条目照收 —— 条目本身是合法 JSON |
+| `runDigest` | `lessons` 结果带 `truncated` / `suggestions`；合并统计行在截断时追加 ` TRUNCATED kept=N/1437chars` |
+| `formatReport` | 挪进纯模块 `lib/report.js`（原来在 `lib/index.js`，测试导入不到宿主的 `@deepseek-ai/dsh-tools`），并新增「教训：本次输出被截断，只收下 N 条」；截断时不再同时说「没有新的可写条目」 |
+| 设置页横幅 | `describeRun` 对 `run.lessons.truncated` 追加「教训 被截断（收下 N 条）」 |
+| `callLlm` | 返回带 `durationMs`；lessons 与 persona 两个 stage 的日志都打印它（这次调用约 140 s，上限 180 s，下次好判断是不是流被掐断） |
+
+`{"add":[]}` 仍是合法答案：0 条 + `truncated:false`，不写 warn。
+
+### 测试（57 → 61）
+
+- 单个条目对象 → 1 条 suggestion（且 `{topic:…}` 这种非条目对象仍解析为 0，兜底不放宽）。
+- 事故原样 fixture `test/fixtures/lessons-truncated-2026-11-11.txt`（1437 字符，与日志逐字节一致，测试里断言长度）：`complete:false`、收下 1 条、`truncated:true`、warn 里同时出现 `1437 chars` 与 `in Nms`、摘要出现「本次输出被截断，只收下 1 条」。
+- `{"add":[{…}]}` → `truncated:false`、1 条、无 warn；`extractJson` 仍只返回 value。
+- `{"add":[]}` → 0 条、`truncated:false`、无 warn。
+- 客户端横幅：一次截断运行的 run 记录 → 横幅同时显示「教训 +1」与「教训 被截断（收下 1 条）」。
+- 既有 57 项全部原样通过（persona / identity / stage1-3 断言未改动）。
+
+### 验证步骤（0.3.1，需重启）
+
+1. 重启 → 状态卡 `v0.3.1`。
+2. 正常日更：日志应是 `[info] lessons: N suggestions in MMs`，不出现 warn。
+3. 下次真的断流时（不用刻意制造）：日志里应是 `[warn] lessons truncated: … chars in …ms, kept …`，摘要与横幅出现「被截断，只收下 N 条」。
+
+### 已知限制
+
+- 截断只救回残片里**第一个**完整条目（`extractJson` 的容错只返回第一个可解析片段）：这次 8 条里回来 1 条。其余不会自动重试 —— 它们还在当天日报的 `## 可疑雷点` 里，但不会再交给模型一次。
+- `truncated` 只说明「整体 JSON 没闭合」，区分不了「模型写坏」和「流被掐断」；耗时（约 140 s / 180 s）只是旁证。

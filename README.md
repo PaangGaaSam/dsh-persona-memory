@@ -103,7 +103,16 @@ Three hard rules:
 
 While the page is open it polls `/persona-memory/status` every 30 s. When a new run appears, a banner reports it: time, sessions, cards, profile/self-account deltas, and how many self-account entries were promoted/demoted/superseded. A failed merge says so, with the reason (the file is left untouched and the raw answer goes to the log), instead of looking like "nothing new". The banner is always on; ticking **运行通知** additionally asks for a desktop system notification, and **测试系统通知** probes whether the shell grants it. Nothing is pushed while the page is closed — there is no host notification service to hook into.
 
-The run record itself carries the outcome (`profile`, `persona`, `skipped`, `error`) so the banner needs no log parsing.
+The run record itself carries the outcome (`profile`, `persona`, `lessons` (including `truncated` / `suggestions`), `skipped`, `error`) so the banner needs no log parsing.
+
+### When the model's answer is cut off
+
+Models occasionally stop mid-sentence (stream cut, near-timeout) and leave the JSON unclosed. That is no longer reported as success:
+
+- Any entry that is already complete inside the fragment is still taken — the entry is valid JSON on its own, only the outer `{"add":[` never closed; a good row is not discarded with it.
+- The log gets one `warn`: `lessons truncated: 1437 chars in 140032ms, kept 1 suggestion(s)`. Length and elapsed time on the same line, so the next time it is obvious whether the model wrote badly or the stream was cut (default ceiling 180 s).
+- The run summary and the panel banner both say "the answer was cut off, kept N", instead of "no new writable entry".
+- `{"add":[]}` is still a legitimate answer (a genuinely quiet day) and does not raise a warning.
 
 ## Tools
 
