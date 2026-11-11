@@ -205,7 +205,7 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 - 仓库：<https://github.com/PaangGaaSam/dsh-persona-memory>（`main`，中英双 README，底部有求 star / 求反馈段）
 - **收录 PR 已合并**：<https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/13895>（2026-11-11 16:47 北京，维护者 `fkysly` 合并；条目 `data/plugins/PaangGaaSam__dsh-persona-memory.yml` 已在 `main`）。年龄门槛按预期自愈（仓库建于 2026-11-10 16:08），**没有推空提交**。
 - **维护者的合并留言（待拍板）**：他说本插件默认值会花 token，已把「每天 17:00 自动运行 / 最多 20 会话 / `deepseek-v4-pro` / 结果自动应用 / 最多 1200 字注入」写进市场描述；并注明包名 `dsh-persona-memory` 与 ifenc、Quophic 两个条目相同，只能装其中一个。他提出：**若把默认改成关闭自动运行，发新版后告诉他**，他删掉描述里那半句。
-- **市场描述已落后于代码**：描述只写「user profile + companion personality」，0.3.0 的教训层没有提。**用户已拍板：只补描述，默认值不动**（不改成「装完不自动跑」）。待办：在 PR #13895 留言请维护者补一句（本机没有 GitHub token / `gh`，发不了评论，只能由用户粘贴现成文本）。
+- **市场描述已落后于代码**：描述只写「user profile + companion personality」，0.3.0 的教训层没有提。**用户已拍板：只补描述，默认值不动**（不改成「装完不自动跑」）。**已留言**：<https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/13895#issuecomment-6791818455>（2026-11-11 17:10，附了 en/zh 的替换句，明确请保留 token 提醒和包名那句）；等维护者处理。
 - 另注：原始提交的 yml 只有 6 行（url/name/category/description 一行），现在 `main` 上那段带 token 提醒和包名撞车说明的长描述是维护者合并后自己改的 —— 说明描述由他手写，贡献者别直接改描述，**走留言**。
 
 ### 三个未决事项（都有推荐，等用户拍板）
