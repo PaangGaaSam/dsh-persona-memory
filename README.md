@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Daily cross-workspace session digest that grows a **user profile** and a **companion personality**, then injects both into every prompt — with a settings page to inspect and steer it.
+Daily cross-workspace session digest that grows a **user profile**, a **companion personality** and a **lessons list**, then injects them into every prompt — with a settings page to inspect and steer it.
 
 ## Install
 
@@ -19,11 +19,36 @@ Requirements: DSH desktop with the `web` client platform (the settings page is a
 ## What it does
 
 1. **Every day at 17:00** (configurable) it reads all session logs under `$DSH_HOME/sessions` (every workspace, every session in the window), including multi-frame zstd logs.
-2. **Stage 1** — one card per session: topic, user needs, observations (preference / style / thinking / correction / friction), **my own judgments**, unresolved items.
-3. **Stage 2** — merges the cards into `persona-memory/daily/YYYY-MM-DD.md`; my judgments are copied verbatim into `## 我的判断` instead of being rephrased by the model.
+2. **Stage 1** — one card per session: topic, user needs, observations (preference / style / thinking / correction / friction), **my own judgments**, suspect failure points (the step to change next time), unresolved items.
+3. **Stage 2** — merges the cards into `persona-memory/daily/YYYY-MM-DD.md`; my judgments are copied verbatim into `## 我的判断` instead of being rephrased by the model. Suspect lessons go to `## 可疑雷点`, and **an empty answer is recorded as 「（无）」**.
 4. **Stage 3** — turns observations into profile suggestions, then merges them into `profile.md` (near-duplicate detection, evidence chains, pinned entries protected).
 5. **Weekly** — takes only my own judgments as material, writes them in the first person, and consolidates them into `persona.md` (我认为我是谁 / 我和你相处时的样子 / 还没想清楚的) with the same evidence rules.
-6. **Every prompt** — a `persona-memory` system-prompt section renders pinned + recent entries under a character budget (default 1200 chars, 70/30 profile/persona). The persona part carries first-person self-accounts only.
+6. **End of the daily run** — the day's suspects plus the existing lessons text go to the model once; the code then decides caps, near-duplicate merges, 90-day expiry and which rules wait for approval. Written to `lessons.md`.
+7. **Every prompt** — a `persona-memory` system-prompt section, in the order `facts (placeholder) → lessons → profile → persona`. Default 1200 chars, baseline profile 55 / lessons 25 / persona 20; a layer that needs less hands its share to a truncated one, and **lessons stop at 40 % (hard ceiling)** because they are in every turn.
+
+## How lessons accumulate
+
+Lessons answer a different question: **what went wrong last time, and which step to change next time**. That is the operational layer, so it never enters the profile, the self-account or the identity block — those answer "who you are / who I am", lessons answer "what to do". They are injected every turn, so they must stay few and hard.
+
+| Section | Cap | Decay | Merge | Overturned by | Who adds/removes |
+|---|---|---|---|---|---|
+| 铁律 (rule) | 5 | never | never | never by the system | only a human; **a human must approve it** |
+| 时效经验 (exp) | 5 | no confirmation for 90 days → retired | same pit → merged (0.85) | can be disproved | the system may retire, a human may too |
+| 已作废 (archive) | unlimited | — | — | — | appended only, kept for reading |
+
+**Append-only and invalidate-only, never rewrite.** The system never rewrites the sentence of an existing entry: new rows are appended, a row that stops holding moves to 已作废 with its original text and a reason. Every write compares each pre-existing entry (id, sentence, scope, anchor) before and after — if any of them changed, the write is refused. That is an assertion in the code, not a convention in the docs. A human **replace** is the only rewrite path: it must be clicked on the settings page, the old wording still goes to 已作废, and the new one is appended.
+
+Lessons arrive through three entries:
+
+1. **The daily question** — the note carries `## 可疑雷点`, and the answer may be 「（无）」. An empty answer is still an answer; the panel shows the streak of empty days.
+2. **Consequence retrospection** — when a consequence signal shows up (tool failure / on-the-spot correction / rework / unresolved failure), the same run re-reads the last three daily notes to name the corrective step.
+3. **The user fallback** — saying 「记一下」 simply becomes a candidate and lands in the daily note. No new tool.
+
+**The model proposes, the code decides.** The model writes the step and a section suggestion; the code decides caps, merging, expiry, and that **every new rule waits for approval** before it takes effect. The section follows the failure condition: depends on the task (scale, reversibility, destructiveness) → rule; depends on the environment (version, path, API shape) → experience. A rule also has to pass one self-check: **would breaking it cause an irreversible consequence?** Rework alone is not enough.
+
+**Conflict detection belongs to the system; handling belongs to the personality.** Two entries in the same scope that say the same thing in opposite directions (one 「必须」, one 「不要」) are marked `[冲突]` by a mechanical scan; the panel shows it and the injected line carries it — but the code neither resolves nor deletes either side. Handling is left to the self-account, and while that is still empty the default is **ask once before acting** (the soft line in the block), which disappears as the self-account grows.
+
+Scope v1 has two tiers only: **the current workspace (cwd)** and **global**. A lesson for another worktree never reaches this workspace's prompt. Each lesson also carries an anchor (date / session / the daily sentence); if that daily entry is deleted the lesson is kept and the panel shows the anchor as 「（原条目已删除）」.
 
 ## How the personality settles
 
@@ -57,6 +82,8 @@ The plugin ships a browser half (`dsh.client`) that registers a **记忆与画�
 The **my self-account** card reports **how many lines are injected right now** (and whether the block is empty). The file and the prompt are two different things: candidates never inject, so when it says "nothing is injected yet" the card also says how much evidence is still missing — no need to read code or logs.
 
 Both documents show **three rows** per section by default (pinned first) with a **Show all (N)** expander underneath; the user-locked list never folds. Ordering is pinned → most recently verified → most confident, so a folded row can always be reached and pinned, and nothing you pinned can hide behind the fold. Folding is display only — it never changes how many lines are injected.
+
+**Lessons** get their own card (never inside the profile card): rules / experiences / retired rows, each with scope, anchor and last confirmation, plus conflict and pending marks. From there you can add a lesson by hand (rule or experience), retire one (a reason is required), replace one (rules only, confirmed twice), and approve a proposed rule. The card also shows **the streak of empty daily answers**, **how many rules wait for approval**, and **how many lessons are injected right now** (same wording as the self-account card). It only reports those numbers; it never acts on them.
 
 Every knob in the config block below is editable there — including the 我认为我是谁 date threshold and the demote window — so the patch row is never the only way in. Each field carries a one-line explanation of what it changes and the page validates what it can (time format, numeric ranges) before the request leaves: an invalid value shows a message under the control and disables **保存**. **Provider and model are dropdowns** fed by the host's own model catalogue (`ctx.llm.listProviders()` / `listModels()`, served over `GET /persona-memory/models`); the controls use `color-scheme: inherit`, so the closed box and the native popup follow whatever light/dark scheme the host resolved. When an adapter cannot enumerate its models the fields fall back to free-text inputs, and the value that is already saved is always kept as an option, so opening the page can never silently change it.
 
@@ -95,10 +122,11 @@ The run record itself carries the outcome (`profile`, `persona`, `skipped`, `err
 $DSH_HOME/persona-memory/
 ├── profile.md            # user profile (single source of truth)
 ├── persona.md            # my self-account (first person; old headings are read and rewritten)
+├── lessons.md            # lessons (rules / experiences / retired; append-only, invalidate-only)
 ├── identity.json         # identity block cache (derived view; never written back)
 ├── config.json           # settings-page overrides (optional)
-├── daily/YYYY-MM-DD.md   # summary / observations / my judgments / follow-ups
-├── history/              # backup before every rewrite: profile-<date>-<ms>.md
+├── daily/YYYY-MM-DD.md   # summary / observations / my judgments / suspect lessons / follow-ups
+├── history/              # backup before every rewrite: profile-<date>-<ms>.md (likewise persona / lessons)
 ├── state.json            # scheduler state
 └── logs/run-YYYY-MM-DD.jsonl
 ```
@@ -127,16 +155,20 @@ $DSH_HOME/persona-memory/
 
 | Route | Purpose |
 |---|---|
-| `GET /persona-memory/status` | Scheduler status, config, documents, history |
+| `GET /persona-memory/status` | Scheduler status, config, the three documents, history |
 | `GET /persona-memory/config` | Editable config values and defaults |
 | `POST /persona-memory/config` | `{ patch }` — validate, persist, apply |
 | `POST /persona-memory/run` | `{ forcePersona }` — run the digest now |
-| `GET /persona-memory/documents` | Both documents as sections of entries, plus the latest daily note |
+| `GET /persona-memory/documents` | The three documents as sections of entries, plus the latest daily note |
 | `GET /persona-memory/models` | Provider and model catalogue for the dropdowns |
 | `POST /persona-memory/pin` | `{ doc, id, pinned }` |
-| `GET /persona-memory/history` | `?doc=profile` or `?doc=persona` — pre-write backups |
+| `GET /persona-memory/history` | `?doc=profile`, `persona` or `lessons` — pre-write backups |
 | `POST /persona-memory/rollback` | `{ doc, name }` — restore one backup |
 | `POST /persona-memory/identity/refresh` | Regenerate the identity block from the current profile (**the only write action**, and there is no route that accepts its text) |
+| `POST /persona-memory/lessons/add` | `{ text, section, scope }` — add a lesson by hand |
+| `POST /persona-memory/lessons/approve` | `{ id }` — approve a proposed rule (refused once five are in force) |
+| `POST /persona-memory/lessons/reject` | `{ id, reason }` — retire it; **a reason is required**, the original text moves to 已作废 |
+| `POST /persona-memory/lessons/replace` | `{ id, text }` — rules only; the old wording is archived, the new one appended |
 
 Every non-loopback request is rejected with 403; wrong methods get 405.
 
@@ -144,6 +176,8 @@ Every non-loopback request is rejected with 403; wrong methods get 405.
 
 - Requires the host process to be running at the scheduled time; missed days are caught up once on the next start.
 - Model output must be JSON; parsing tolerates prose/fences but a bad generation only degrades that stage (the other stages still write).
+- **Scope v1 only trusts a cwd the host hands over**: it is not confirmed that the host rebuilds the prompt every turn, so `buildSectionText` takes `cwd` from the context when present and otherwise the host process cwd. Global lessons therefore always inject; a workspace lesson injects only when the host process runs in that workspace. Keyword and file-type matching are deliberately not implemented — a missed lesson beats a wrongly applied one.
+- Conflict detection is a mechanical scan (same scope + opposite polarity + text similarity ≥ 0.4), not semantic understanding: it catches clear opposites and can miss indirect phrasing. A false mark deletes nothing.
 - Source changes to a `link:`-installed package need a host restart (the loader does not hot-reload linked sources, and the client bundle is served from `lib/client.js` as built).
 
 ## If this is useful to you

@@ -9,6 +9,24 @@ import { backupDocument, listHistory, restoreHistory } from '../lib/history.js'
 import { describeDocument, documentsPayload, personaInjection, readJsonBody, registerRoutes } from '../lib/http.js'
 import { ensureIdentity, identityInputs, parseIdentity, readIdentity } from '../lib/identity.js'
 import {
+  addManualLesson,
+  applyLessonSuggestions,
+  approveLesson,
+  archiveLesson,
+  assertAppendOnly,
+  conflictPairs,
+  consecutiveEmptyDays,
+  describeLessons,
+  emptyLessons,
+  formatDailyLesson,
+  lessonsStats,
+  parseDailyLessons,
+  parseLessons,
+  renderLessonsInjection,
+  replaceLesson,
+  scopeMatches,
+} from '../lib/lessons.js'
+import {
   appendLockedEntry,
   applyPersonaSuggestions,
   applySuggestions,
@@ -25,8 +43,8 @@ import {
   renderPersonaInjection,
   setPinned,
 } from '../lib/profile.js'
-import { extractJson, parseCard, parseDaily, parseDailyObservations, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites } from '../lib/digest.js'
-import { PERSONA_HEADING, buildSectionText } from '../lib/inject.js'
+import { extractJson, parseCard, parseDaily, parseDailyObservations, parseLessonSuggestions, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites, detectConsequenceSignals } from '../lib/digest.js'
+import { PERSONA_HEADING, buildSectionText, planBudget, renderLayers } from '../lib/inject.js'
 import { resolveDshHome } from '../lib/util.js'
 
 let passed = 0
@@ -261,6 +279,78 @@ if (fs.existsSync(sessionsRoot)) {
     const localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     assert.strictEqual(state.lastPersonaRunDay, localDay)
   })
+
+  await ok('lessons: the merge never reads persona.md', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-lessons-stage-'))
+    const paths2 = {
+      root: dir,
+      sessionsRoot,
+      dailyDir: path.join(dir, 'daily'),
+      profileFile: path.join(dir, 'profile.md'),
+      personaFile: path.join(dir, 'persona.md'),
+      lessonsFile: path.join(dir, 'lessons.md'),
+      identityFile: path.join(dir, 'identity.json'),
+      stateFile: path.join(dir, 'state.json'),
+      lockFile: path.join(dir, '.lock'),
+      logDir: path.join(dir, 'logs'),
+    }
+    fs.mkdirSync(paths2.dailyDir, { recursive: true })
+    fs.writeFileSync(paths2.personaFile, [
+      '---', 'version: 1', 'updatedAt: 2026-11-10T00:00:00.000Z', 'title: 助手性格', '---', '',
+      '## 我认为我是谁',
+      '- [core-1] [置信度 0.90] 我是 MARKER-PERSONA 那种人（证据：2026-11-10/session-aaaa1111、2026-11-11/session-bbbb2222、2026-11-12/session-cccc3333）',
+      '', '## 我和你相处时的样子', '', '## 还没想清楚的', '',
+    ].join('\n'), 'utf8')
+    const prompts = []
+    const ctx2 = {
+      llm: {
+        stream: async function* (options) {
+          const system = options.messages[0].content[0].text
+          const user = options.messages[1].content[0].text
+          prompts.push({ system, user })
+          let out
+          if (system.includes('会话抽取器')) {
+            out = JSON.stringify({
+              topic: '测试',
+              observations: [{ kind: 'correction', text: '他纠正我不该先改', cites: [1] }],
+              self: [{ event: '我直接改了代码', judgment: '我认为该先复现', confidence: 0.7, cites: [1] }],
+              lessons: [{ section: 'exp', text: '改之前先复现', cites: [1] }],
+              unresolved: ['测试失败'],
+            })
+          } else if (system.includes('日记作者')) {
+            out = JSON.stringify({
+              summary: ['一天'],
+              unresolved: [],
+              observations: [],
+              lessons: [{ section: 'exp', text: '重启后确认注入段真的出现', evidence: '' }],
+            })
+          } else if (system.includes('用户画像编辑')) {
+            out = JSON.stringify({ add: [] })
+          } else if (system.includes('自我记述者')) {
+            out = JSON.stringify({ add: [] })
+          } else if (system.includes('教训整理器')) {
+            out = JSON.stringify({ add: [{ section: 'exp', text: '改之前先复现，再动手改代码', scope: '全局', anchor: '2026-11-10/session-aaaa1111 · 他纠正我不该先改' }] })
+          } else if (system.includes('工作画像归纳器')) {
+            out = JSON.stringify({ fields: { role: { text: '', basis: [] } } })
+          } else {
+            out = '{}'
+          }
+          yield { type: 'text', text: out }
+        },
+      },
+    }
+    const report = await runDigest(ctx2, config, paths2, { lastPersonaRunDay: '', excludeSessionIds: [] }, () => {}, { forcePersona: true })
+    const lessonPrompt = prompts.find((prompt) => prompt.system.includes('教训整理器'))
+    assert.ok(lessonPrompt !== undefined, 'the lessons stage ran')
+    assert.ok(!lessonPrompt.user.includes('MARKER-PERSONA'), 'persona.md is not part of the lessons input')
+    assert.ok(!lessonPrompt.system.includes('MARKER-PERSONA'))
+    const personaPrompt = prompts.find((prompt) => prompt.system.includes('自我记述者'))
+    assert.ok(personaPrompt !== undefined, 'the persona stage ran in the same pass')
+    assert.ok(personaPrompt.user.includes('MARKER-PERSONA'), 'the persona stage did read it — only the lessons stage may not')
+    assert.ok(fs.readFileSync(paths2.lessonsFile, 'utf8').includes('改之前先复现'), 'the suggestion landed in lessons.md')
+    assert.ok(report.lessons !== null && report.lessons.error === undefined)
+    assert.strictEqual(report.lessons.added, 1)
+  })
 }
 
 ok('config: overrides win over the patch row and only editable keys persist', () => {
@@ -375,6 +465,14 @@ ok('http: documents project entries and the panel payload carries the daily note
   // any": an empty persona document injects nothing, and the count says so.
   assert.deepStrictEqual(payload.documents.persona.injected, { enabled: true, count: 0, chars: 0 })
   assert.deepStrictEqual(documentsPayload(paths, composeConfig({}, { promptBudgetChars: 0 }), {}).documents.persona.injected, { enabled: false, count: 0, chars: 0 })
+  // The lessons layer is always projected, even before lessons.md exists.
+  assert.strictEqual(payload.lessons.sections.length, 3)
+  assert.deepStrictEqual(payload.lessons.sections.map((section) => section.key), ['rule', 'exp', 'archive'])
+  assert.deepStrictEqual(payload.lessons.stats.counts, { rule: 0, exp: 0, archive: 0 })
+  assert.strictEqual(payload.lessons.injected.count, 0)
+  // The two older daily notes have no 可疑雷点 section (they predate the feature),
+  // so they were never asked — the streak is 0, not 2.
+  assert.strictEqual(payload.lessons.emptyDays, 0)
 })
 
 ok('persona injection count matches what actually reaches the prompt', () => {
@@ -565,6 +663,28 @@ ok('client bundle registers a settings section and renders the loaded panel', as
     },
     personaIsDue: false,
     daily: { date: '2026-11-10', text: '# 今天\n- 完成 v0.2' },
+    // The lessons card: two active rules (one conflicting with an experience),
+    // one 待确认 rule, two active experiences, two retired rows. Nothing here
+    // folds except the archive, which is exactly what the page must show.
+    lessons: {
+      text: '',
+      sections: describeLessons((() => {
+        let text = emptyLessons()
+        text = addManualLesson(text, { section: 'rule', text: '删文件前先确认绝对路径', scope: '全局' }, { date: '2026-11-09' }).text
+        text = addManualLesson(text, { section: 'rule', text: '改完代码必须先跑测试再重启', scope: '全局' }, { date: '2026-11-09' }).text
+        text = addManualLesson(text, { section: 'exp', text: '改完代码不要跑测试，直接重启更快', scope: '全局' }, { date: '2026-11-09' }).text
+        text = addManualLesson(text, { section: 'exp', text: '这个仓库要先构建客户端', scope: 'D:\\repo-a' }, { date: '2026-11-09' }).text
+        text = addManualLesson(text, { section: 'exp', text: '写状态文件别用 Set-Content', scope: '全局' }, { date: '2026-11-09' }).text
+        text = archiveLesson(text, 'exp-2', '环境已经变了', { date: '2026-11-10' }).text
+        text = archiveLesson(text, 'exp-3', '已经改成自动写盘', { date: '2026-11-10' }).text
+        return applyLessonSuggestions(text, [
+          { section: 'rule', text: '覆盖文件前先备份', scope: '全局', anchor: { date: '2026-11-10', session: 'session-x', note: '改错配置' } },
+        ], { date: '2026-11-10' }).text
+      })(), {}),
+      stats: { counts: { rule: 2, exp: 1, archive: 2 }, pending: 1, conflicts: 2 },
+      injected: { enabled: true, count: 2, chars: 60, skipped: 1, conflicts: 2 },
+      emptyDays: 2,
+    },
   }
   const fetchCalls = []
   let currentPayload = payload
@@ -574,7 +694,7 @@ ok('client bundle registers a settings section and renders the loaded panel', as
     models: { 'deepseek-account': [{ id: 'deepseek-flash', name: 'deepseek-flash' }, { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] },
   }
   globalThis.fetch = async (url, init) => {
-    fetchCalls.push({ url, method: init?.method ?? 'GET' })
+    fetchCalls.push({ url, method: init?.method ?? 'GET', body: init?.body })
     // The panel asks for the model catalogue separately so a slow provider never
     // delays the form; answer it like the host does.
     if (String(url).endsWith('/persona-memory/models')) {
@@ -732,11 +852,13 @@ ok('client bundle registers a settings section and renders the loaded panel', as
 
   // Provider and model become selects once the host catalogue lands, and the
   // saved model must be one of the options — a select that dropped it would
-  // rewrite the config on the next save.
+  // rewrite the config on the next save. The lessons card adds one more select
+  // (which section a manual lesson goes into); it must not be mistaken for one.
   const selects = () => elements.filter((element) => element.type === 'select')
-  assert.strictEqual(selects().length, 2, 'provider and model render as selects')
+  assert.strictEqual(selects().length, 3, 'provider, model, and the lesson section')
   const modelSelect = selects()[1]
   assert.strictEqual(modelSelect.props.value, 'deepseek-v4-pro')
+  assert.deepStrictEqual(selects()[2].props.children.map((option) => option.props.value), ['rule', 'exp'])
   const modelOptions = modelSelect.props.children.map((option) => option.props.value)
   assert.deepStrictEqual(modelOptions, ['deepseek-flash', 'deepseek-v4-pro'])
   assert.ok(rendered.some((text) => text.includes('deepseek-flash')), 'option labels reach the document')
@@ -753,7 +875,7 @@ ok('client bundle registers a settings section and renders the loaded panel', as
 
   // Validation and help text: the hint explains the knob, and a value outside the
   // field's range shows a message and blocks saving instead of bouncing off the host.
-  const saveButton = () => elements.filter((element) => element.type === 'button' && element.props['data-primary'] === 'true').pop()
+  const saveButton = () => elements.find((element) => element.type === 'button' && (element.props.children === '保存设置' || element.props.children === '保存中…'))
   const numberInputs = () => elements.filter((element) => element.type === 'input' && element.props.type === 'number')
   assert.ok(rendered.some((text) => text.includes('采样')), 'temperature carries an explanation')
   numberInputs()[0].props.onChange({ target: { value: '9' } })
@@ -781,6 +903,70 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   render({ type: component, props: { t: translate } })
   const optimistic = checkboxes()[checkboxes().length - 1]
   assert.strictEqual(optimistic.props.checked, true, 'the toggle flips before the request settles')
+
+  // ── lessons: a separate card, human actions only ──────────────────────────
+  currentPayload = payload
+  timers[0]()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  rerender()
+  assert.ok(rendered.some((text) => text.includes('教训只回答')), 'the lessons card explains what it is for')
+  assert.ok(rendered.some((text) => text.includes('连续 2 天可疑雷点空答')), 'shows the empty-answer streak')
+  assert.ok(rendered.some((text) => text.includes('待确认铁律 1 条')), 'shows how many rules wait for approval')
+  assert.ok(rendered.some((text) => text.includes('当前注入：2 条（约 60 字符）')), 'shows the injected count')
+  assert.ok(rendered.some((text) => text.includes('另有 1 条属于别的工作区')), 'counts workspace rows that do not inject here')
+  assert.ok(rendered.some((text) => text.includes('删文件前先确认绝对路径')), 'renders a rule verbatim')
+  assert.ok(rendered.some((text) => text.includes('已作废')), 'shows the retired section')
+  assert.ok(rendered.some((text) => text.includes('环境已经变了')), 'shows why a row was retired')
+  assert.ok(rendered.some((text) => text.includes('冲突')), 'the conflict mark is visible')
+  assert.ok(rendered.some((text) => text.includes('待确认')), 'a pending rule says it is pending')
+  const lessonCalls = (name) => fetchCalls.filter((call) => call.url === `/persona-memory/lessons/${name}`)
+  const lessonButton = (label) => elements.filter((element) => element.type === 'button' && element.props.children === label)
+
+  // Approve: the only way a proposed rule can start being followed.
+  assert.ok(lessonButton('批准').length === 1, 'a pending rule offers approve')
+  lessonButton('批准')[0].props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(lessonCalls('approve').length, 1)
+  assert.deepStrictEqual(JSON.parse(lessonCalls('approve')[0].body), { id: 'rule-3' })
+
+  // Retire: the confirm button stays disabled until a reason is typed, because
+  // an archived lesson keeps its original text and needs a reason to stay readable.
+  lessonButton('否决')[0].props.onClick()
+  rerender()
+  const reasonInput = elements.find((element) => element.type === 'input' && element.props.placeholder === '作废原因（必填）')
+  assert.ok(reasonInput !== undefined, 'retiring asks for a reason')
+  const confirmRetire = () => elements.find((element) => element.type === 'button' && element.props.children === '确认否决')
+  assert.strictEqual(confirmRetire().props.disabled, true, 'a retire cannot be confirmed without a reason')
+  reasonInput.props.onChange({ target: { value: '不再适用' } })
+  rerender()
+  confirmRetire().props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(lessonCalls('reject').length, 1)
+  assert.deepStrictEqual(JSON.parse(lessonCalls('reject')[0].body), { id: 'rule-1', reason: '不再适用' })
+
+  // Replace: only rules offer it, and it still needs the second click.
+  lessonButton('替换')[0].props.onClick()
+  rerender()
+  const replaceInput = elements.find((element) => element.type === 'input' && element.props.value === '删文件前先确认绝对路径')
+  assert.ok(replaceInput !== undefined, 'replace starts from the current wording')
+  replaceInput.props.onChange({ target: { value: '删文件前先打印解析后的绝对路径' } })
+  rerender()
+  elements.find((element) => element.type === 'button' && element.props.children === '确认替换').props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(lessonCalls('replace').length, 1)
+  assert.deepStrictEqual(JSON.parse(lessonCalls('replace')[0].body), { id: 'rule-1', text: '删文件前先打印解析后的绝对路径' })
+
+  // Manual add: the page posts the sentence, the section and an optional scope.
+  const addInput = elements.find((element) => element.type === 'input' && element.props.placeholder === '下次具体改哪一步（一句可执行动作）')
+  assert.ok(addInput !== undefined, 'the card offers a manual add')
+  addInput.props.onChange({ target: { value: '先看日志再猜原因' } })
+  rerender()
+  const addLessonButton = elements.find((element) => element.type === 'button' && element.props.children === '新增')
+  assert.strictEqual(addLessonButton.props.disabled, false, 'the add button enables once there is text')
+  addLessonButton.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(lessonCalls('add').length, 1)
+  assert.deepStrictEqual(JSON.parse(lessonCalls('add')[0].body), { section: 'rule', text: '先看日志再猜原因', scope: '' })
 
   // A run that finishes while the page is open shows up as a banner within one poll.
   const withRun = (at) => {
@@ -828,6 +1014,7 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
     lockFile: path.join(dir, '.lock'),
     logDir: path.join(dir, 'logs'),
     identityFile: path.join(dir, 'identity.json'),
+    lessonsFile: path.join(dir, 'lessons.md'),
   }
   fs.mkdirSync(paths.dailyDir, { recursive: true })
   const base = applySuggestions(emptyProfile(PROFILE_SECTIONS, '用户画像'), PROFILE_SECTIONS, [
@@ -952,6 +1139,30 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
   assert.ok(!rolled.documents.profile.text.includes('新加的一条'))
   assert.ok(listHistory(paths, 'profile').length >= 2)
   assert.ok(logged.some((line) => line.startsWith('rollback profile')))
+
+  // Lessons: four human actions, each writing through the append-only guard.
+  assert.strictEqual(statusBody.status.stats.lessons.counts.rule, 0)
+  const lessonAdd = await call('lessons/add', { method: 'POST', body: { section: 'rule', text: '删文件前先确认绝对路径', scope: '全局' } })
+  assert.strictEqual(lessonAdd.status, 200, lessonAdd.body)
+  assert.strictEqual(JSON.parse(lessonAdd.body).lessons.stats.counts.rule, 1)
+  assert.ok(fs.readFileSync(paths.lessonsFile, 'utf8').includes('删文件前先确认绝对路径'))
+  const lessonDuplicate = await call('lessons/add', { method: 'POST', body: { section: 'rule', text: '删文件前先确认绝对路径' } })
+  assert.strictEqual(lessonDuplicate.status, 400)
+  assert.strictEqual((await call('lessons/add', { method: 'GET' })).status, 405)
+  assert.strictEqual((await call('lessons/reject', { method: 'POST', body: { id: 'rule-1', reason: '' } })).status, 400, 'a retire needs a reason')
+  const rejected = await call('lessons/reject', { method: 'POST', body: { id: 'rule-1', reason: '不再适用' } })
+  assert.strictEqual(rejected.status, 200)
+  const rejectedBody = JSON.parse(rejected.body)
+  assert.strictEqual(rejectedBody.lessons.sections.find((section) => section.key === 'archive').entries[0].invalidReason, '不再适用')
+  const secondAdd = await call('lessons/add', { method: 'POST', body: { section: 'rule', text: '发布前先看一遍 diff 里有没有密钥', scope: '全局' } })
+  assert.strictEqual(secondAdd.status, 200)
+  const replaced = await call('lessons/replace', { method: 'POST', body: { id: 'rule-2', text: '发布前先看一遍 diff，确认没有密钥再推' } })
+  assert.strictEqual(replaced.status, 200)
+  const archiveRows = JSON.parse(replaced.body).lessons.sections.find((section) => section.key === 'archive').entries
+  assert.ok(archiveRows.some((entry) => entry.text === '发布前先看一遍 diff 里有没有密钥'), 'the replaced wording is kept in the archive')
+  assert.strictEqual((await call('lessons/approve', { method: 'POST', body: { id: 'rule-2' } })).status, 400, 'a non-pending rule cannot be approved')
+  assert.ok(listHistory(paths, 'lessons').length >= 2, 'every lessons rewrite is backed up first')
+  assert.strictEqual((await call('lessons/add', { method: 'POST', body: { text: 'x' }, remote: '10.1.2.3' })).status, 403)
 
   // The identity block has exactly one action: regenerate. No route accepts text.
   assert.strictEqual((await call('identity/refresh', { method: 'GET' })).status, 405)
@@ -1512,6 +1723,366 @@ ok('identity: the block never reaches profile.md or the prompt', async () => {
   const section = buildSectionText(paths, composeConfig({}, { promptBudgetChars: 1200 }))
   assert.ok(section.includes('甲的偏好'), 'the profile is still injected')
   assert.ok(!section.includes('MARKER-IDENTITY'), 'the identity block is never injected')
+})
+
+// ── lessons ──────────────────────────────────────────────────────────────────
+
+ok('lessons: entries are append-only across repeated merges', () => {
+  const anchor = { date: '2026-11-01', session: 'session-aaaa1111', note: '改完没跑测试就重启' }
+  let text = emptyLessons()
+  text = applyLessonSuggestions(text, [
+    { section: 'exp', text: '改完 lib 先跑测试再重启', scope: '全局', anchor },
+  ], { date: '2026-11-01' }).text
+  const first = parseLessons(text).get('exp')[0]
+  assert.ok(first !== undefined)
+  let current = text
+  for (const day of ['2026-11-02', '2026-11-03', '2026-11-04']) {
+    const before = current
+    const result = applyLessonSuggestions(current, [
+      { section: 'exp', text: '改完 lib 先跑测试再重启', scope: '全局', anchor: { ...anchor, date: day } },
+    ], { date: day })
+    assert.strictEqual(result.merged, 1, 'the same pit merges instead of appending a near-copy')
+    assert.deepStrictEqual(assertAppendOnly(before, result.text), [], 'no existing row may change')
+    current = result.text
+  }
+  const after = parseLessons(current).get('exp')
+  assert.strictEqual(after.length, 1, 'four confirmations are still one row')
+  assert.strictEqual(after[0].id, first.id)
+  assert.strictEqual(after[0].text, first.text, 'the sentence is never rewritten')
+  assert.strictEqual(after[0].lastConfirmed, '2026-11-04', 'only the confirmation date moves')
+  assert.strictEqual(after[0].anchor.date, '2026-11-01', 'the original anchor stays')
+
+  // The guarantee is checked, not just claimed: rewording one entry is caught.
+  const tampered = current.replace('先跑测试再重启', '先跑测试')
+  assert.ok(assertAppendOnly(current, tampered).some((violation) => violation.includes('文本被改写')))
+  assert.ok(assertAppendOnly(current, emptyLessons()).some((violation) => violation.includes('被删除')))
+})
+
+ok('lessons: a rule never decays, never merges, and cannot be superseded', () => {
+  const ruleText = '删任何文件前先确认解析后的绝对路径'
+  const proposed = applyLessonSuggestions(emptyLessons(), [
+    { section: 'rule', text: ruleText, scope: '全局', anchor: { date: '2026-01-01', session: 'session-aaaa1111', note: '删错目录' } },
+  ], { date: '2026-01-01' })
+  assert.strictEqual(proposed.pending, 1, 'a proposed rule is parked, never armed')
+  const pendingId = parseLessons(proposed.text).get('rule')[0].id
+  const approved = approveLesson(proposed.text, pendingId, { date: '2026-01-02' })
+  assert.strictEqual(approved.changed, true)
+  const text = approved.text
+  const rule = parseLessons(text).get('rule')[0]
+  assert.strictEqual(rule.pending, false)
+
+  // 400 days later the rule is still there: no decay applies to 铁律.
+  const later = applyLessonSuggestions(text, [], { date: '2027-02-05' })
+  const stillThere = parseLessons(later.text).get('rule')
+  assert.strictEqual(stillThere.length, 1)
+  assert.strictEqual(stillThere[0].lastConfirmed, '2026-01-02')
+
+  // A near-duplicate cannot merge into it, and a contradicting experience cannot
+  // archive it: only a human may remove or reword a rule.
+  const duplicate = applyLessonSuggestions(later.text, [
+    { section: 'rule', text: `${ruleText}。`, scope: '全局' },
+    { section: 'exp', text: '删文件不用确认，直接删更快', scope: '全局', invalidates: rule.id },
+  ], { date: '2027-02-06' })
+  const rules = parseLessons(duplicate.text).get('rule')
+  assert.strictEqual(rules.length, 1, 'no merge, no duplicate')
+  assert.strictEqual(rules[0].text, ruleText)
+  assert.strictEqual(parseLessons(duplicate.text).get('archive').length, 0, 'a suggestion cannot invalidate a rule')
+  assert.deepStrictEqual(assertAppendOnly(later.text, duplicate.text), [])
+})
+
+ok('lessons: five rules, then a sixth waits for approval instead of arming itself', () => {
+  let text = emptyLessons()
+  const ruleTexts = [
+    '删文件前先确认解析后的绝对路径',
+    '改配置前先把原文件备份到 history',
+    '发布前先看一遍 diff 里有没有密钥',
+    '迁移数据前先量一下体积',
+    '动权限之前先记下原始 ACL',
+  ]
+  for (const sentence of ruleTexts) {
+    const added = addManualLesson(text, { section: 'rule', text: sentence, scope: '全局' }, { date: '2026-11-09' })
+    assert.strictEqual(added.changed, true, added.error)
+    text = added.text
+  }
+  const sixth = addManualLesson(text, { section: 'rule', text: '覆盖文件前先确认目标路径', scope: '全局' }, { date: '2026-11-09' })
+  assert.strictEqual(sixth.changed, false)
+  assert.ok(sixth.error.includes('已满 5 条'))
+
+  const proposal = applyLessonSuggestions(text, [
+    { section: 'rule', text: '发布前先看一眼 diff 里有没有密钥', scope: '全局' },
+  ], { date: '2026-11-09' })
+  assert.strictEqual(proposal.pending, 0, 'a duplicate of an existing rule is dropped, not staged')
+  const fresh = applyLessonSuggestions(text, [
+    { section: 'rule', text: '删远程分支前先确认不是默认分支', scope: '全局' },
+  ], { date: '2026-11-09' })
+  assert.strictEqual(fresh.pending, 1, 'a new rule is parked, never armed')
+  const active = parseLessons(fresh.text).get('rule').filter((entry) => entry.pending !== true)
+  assert.strictEqual(active.length, 5)
+  const stats = lessonsStats(fresh.text)
+  assert.strictEqual(stats.counts.rule, 5)
+  assert.strictEqual(stats.pending, 1)
+  const pendingEntry = parseLessons(fresh.text).get('rule').find((entry) => entry.pending === true)
+  const approval = approveLesson(fresh.text, pendingEntry.id, { date: '2026-11-10' })
+  assert.strictEqual(approval.changed, false, 'approval cannot exceed the cap')
+  assert.ok(approval.error.includes('已满 5 条'))
+
+  // 时效经验 has the same cap: over it the lesson stays in the daily note.
+  let exp = emptyLessons()
+  for (const sentence of [
+    '先看宿主版本再决定用哪个 API',
+    'PowerShell 写 json 会带 BOM',
+    '客户端 bundle 不消费 ui-settings',
+    '日报的证据 token 要先规范化',
+    '沙箱拒绝的路径先看 ACL',
+  ]) {
+    exp = addManualLesson(exp, { section: 'exp', text: sentence, scope: '全局' }, { date: '2026-11-09' }).text
+  }
+  const overflow = applyLessonSuggestions(exp, [{ section: 'exp', text: '第六条新经验：先看宿主版本号', scope: '全局' }], { date: '2026-11-09' })
+  assert.strictEqual(overflow.dropped, 1, 'over the cap the lesson stays in the daily note')
+  assert.strictEqual(parseLessons(overflow.text).get('exp').length, 5)
+})
+
+ok('lessons: an unconfirmed experience expires into the archive with its reason', () => {
+  const text = applyLessonSuggestions(emptyLessons(), [
+    { section: 'exp', text: '这个仓库要先构建客户端再刷新', scope: '全局', anchor: { date: '2026-01-01', session: 'session-aaaa1111', note: '刷新没生效' } },
+  ], { date: '2026-01-01' }).text
+  assert.strictEqual(parseLessons(text).get('exp').length, 1)
+  const freed = applyLessonSuggestions(text, [], { date: '2026-04-01' })
+  assert.strictEqual(freed.expired, 1)
+  assert.strictEqual(parseLessons(freed.text).get('exp').length, 0)
+  const archived = parseLessons(freed.text).get('archive')
+  assert.strictEqual(archived.length, 1)
+  assert.strictEqual(archived[0].text, '这个仓库要先构建客户端再刷新', 'the original sentence is kept')
+  assert.ok(archived[0].invalidReason.includes('90 天无确认'))
+  assert.strictEqual(archived[0].invalidatedAt, '2026-04-01')
+  assert.deepStrictEqual(assertAppendOnly(text, freed.text), [])
+
+  // Confirming it again resets the clock instead of expiring it.
+  const confirmed = applyLessonSuggestions(text, [
+    { section: 'exp', text: '这个仓库要先构建客户端再刷新', scope: '全局' },
+  ], { date: '2026-03-20' })
+  assert.strictEqual(confirmed.merged, 1)
+  const kept = applyLessonSuggestions(confirmed.text, [], { date: '2026-04-01' })
+  assert.strictEqual(kept.expired, 0)
+  assert.strictEqual(parseLessons(kept.text).get('exp').length, 1)
+})
+
+ok('lessons: approve, replace, and retire keep every earlier sentence', () => {
+  let text = emptyLessons()
+  text = addManualLesson(text, { section: 'rule', text: '删文件前先确认绝对路径', scope: '全局' }, { date: '2026-11-09' }).text
+  const first = text
+  const proposed = applyLessonSuggestions(text, [
+    { section: 'rule', text: '覆盖文件前先备份', scope: '全局', anchor: { date: '2026-11-10', session: 'session-aaaa1111', note: '覆盖了配置' } },
+  ], { date: '2026-11-10' })
+  assert.deepStrictEqual(assertAppendOnly(first, proposed.text), [])
+  const pending = parseLessons(proposed.text).get('rule').find((entry) => entry.pending === true)
+  assert.ok(pending !== undefined)
+  const approved = approveLesson(proposed.text, pending.id, { date: '2026-11-11' })
+  assert.strictEqual(approved.changed, true)
+  assert.deepStrictEqual(assertAppendOnly(proposed.text, approved.text), [])
+  assert.strictEqual(parseLessons(approved.text).get('rule').find((entry) => entry.id === pending.id).pending, false)
+
+  const replaced = replaceLesson(approved.text, 'rule-1', '删文件前先打印解析后的绝对路径', { date: '2026-11-12' })
+  assert.strictEqual(replaced.changed, true)
+  assert.deepStrictEqual(assertAppendOnly(approved.text, replaced.text), [])
+  const archive = parseLessons(replaced.text).get('archive')
+  assert.strictEqual(archive.length, 1)
+  assert.strictEqual(archive[0].id, 'rule-1', 'the old wording keeps its id and its text')
+  assert.strictEqual(archive[0].text, '删文件前先确认绝对路径')
+  assert.strictEqual(archive[0].invalidReason, '人工替换')
+  assert.ok(parseLessons(replaced.text).get('rule').some((entry) => entry.text === '删文件前先打印解析后的绝对路径'))
+
+  const noReason = archiveLesson(replaced.text, pending.id, '')
+  assert.strictEqual(noReason.changed, false)
+  assert.ok(noReason.error.includes('原因'))
+  const retired = archiveLesson(replaced.text, pending.id, '不再适用', { date: '2026-11-13' })
+  assert.strictEqual(retired.changed, true)
+  assert.deepStrictEqual(assertAppendOnly(replaced.text, retired.text), [])
+  assert.strictEqual(parseLessons(retired.text).get('archive').length, 2)
+  // Replacement is for rules only.
+  assert.strictEqual(replaceLesson(retired.text, pending.id, 'x').changed, false)
+})
+
+ok('lessons: scope matches the current workspace and the global list only', () => {
+  let text = emptyLessons()
+  text = addManualLesson(text, { section: 'exp', text: '这个工作区要先构建客户端再刷新', scope: 'D:\\repo-a' }, { date: '2026-11-10' }).text
+  text = addManualLesson(text, { section: 'exp', text: '全局经验：改完先跑测试', scope: '全局' }, { date: '2026-11-10' }).text
+  const here = renderLessonsInjection(text, 2000, { cwd: 'D:/repo-a/' })
+  assert.ok(here.includes('这个工作区要先构建客户端再刷新'), 'slashes and a trailing separator still match')
+  assert.ok(here.includes('全局经验：改完先跑测试'))
+  const elsewhere = renderLessonsInjection(text, 2000, { cwd: 'D:\\repo-b' })
+  assert.ok(!elsewhere.includes('这个工作区要先构建客户端再刷新'), 'another worktree does not get this workspace lesson')
+  assert.ok(elsewhere.includes('全局经验：改完先跑测试'), 'global lessons always apply')
+  const unknown = renderLessonsInjection(text, 2000, {})
+  assert.ok(!unknown.includes('这个工作区'), 'without a cwd a workspace lesson is never injected')
+  assert.strictEqual(scopeMatches('D:\\repo-a', 'd:\\REPO-A\\'), true)
+  assert.strictEqual(scopeMatches('D:\\repo-a', 'D:\\repo-b'), false)
+  assert.strictEqual(scopeMatches('全局', ''), true)
+  assert.strictEqual(scopeMatches('D:\\repo-a', ''), false)
+})
+
+ok('lessons: conflicting lessons are marked and still injected', () => {
+  let text = emptyLessons()
+  text = addManualLesson(text, { section: 'rule', text: '改完代码必须先跑测试再重启', scope: '全局' }, { date: '2026-11-09' }).text
+  text = addManualLesson(text, { section: 'exp', text: '改完代码不要跑测试，直接重启更快', scope: '全局' }, { date: '2026-11-09' }).text
+  const pairs = conflictPairs(parseLessons(text))
+  assert.strictEqual(pairs.length, 1, 'the mechanical scan finds the opposite pair')
+  assert.deepStrictEqual([pairs[0].a.id, pairs[0].b.id].sort(), ['exp-1', 'rule-1'])
+  const injection = renderLessonsInjection(text, 2000, { askOnConflict: true })
+  assert.ok(injection.includes('[冲突]'), 'the mark reaches the prompt')
+  assert.ok(injection.includes('改完代码必须先跑测试再重启'), 'both sides are still injected')
+  assert.ok(injection.includes('改完代码不要跑测试'), 'nothing is silently dropped')
+  assert.ok(injection.includes('动手前先问一次'), 'with no self-account the soft default asks once')
+  const sections = describeLessons(text)
+  const ruleRow = sections.find((section) => section.key === 'rule').entries[0]
+  assert.strictEqual(ruleRow.conflict, true)
+  // A decided self-account removes the soft line but keeps the mark.
+  assert.ok(!renderLessonsInjection(text, 2000, {}).includes('动手前先问一次'))
+})
+
+ok('lessons: the daily note keeps candidates, an empty answer, and the anchor lookup', () => {
+  const note = renderDaily('2026-11-11', { summary: [], observations: [], unresolved: [] }, [], [
+    { section: 'rule', text: '删文件前先确认绝对路径', evidence: '2026-11-11/session-aaaa1111' },
+    { section: 'exp', text: '写状态文件别用 Set-Content', evidence: '' },
+  ])
+  assert.ok(note.includes('## 可疑雷点'))
+  const rows = parseDailyLessons(note)
+  assert.deepStrictEqual(rows.map((row) => row.section), ['rule', 'exp'])
+  assert.strictEqual(rows[0].text, '删文件前先确认绝对路径')
+  assert.strictEqual(rows[0].evidence, '2026-11-11/session-aaaa1111')
+  assert.strictEqual(rows[1].evidence, '')
+  assert.strictEqual(formatDailyLesson({ section: 'exp', text: 'x', evidence: '' }), '- [exp] x')
+  const empty = renderDaily('2026-11-11', { summary: [], observations: [], unresolved: [] }, [], [])
+  assert.ok(empty.includes('## 可疑雷点\n- （无）'), 'an empty answer is recorded as an answer')
+  assert.deepStrictEqual(parseDailyLessons(empty), [])
+
+  // Empty-answer streak: three completed days in a row, then a day that had one.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-lessons-days-'))
+  const dailyDir = path.join(dir, 'daily')
+  fs.mkdirSync(dailyDir, { recursive: true })
+  const now = new Date()
+  const dayKey = (offset) => {
+    const d = new Date(now.getTime() - offset * 86400000)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  for (const offset of [1, 2, 3]) {
+    fs.writeFileSync(path.join(dailyDir, `${dayKey(offset)}.md`), renderDaily(dayKey(offset), { summary: [], observations: [], unresolved: [] }, [], []))
+  }
+  fs.writeFileSync(path.join(dailyDir, `${dayKey(4)}.md`), renderDaily(dayKey(4), { summary: [], observations: [], unresolved: [] }, [], [{ section: 'exp', text: '有一天写了一条', evidence: '' }]))
+  assert.strictEqual(consecutiveEmptyDays({ dailyDir }, now), 3, 'the streak stops at the day that had a candidate')
+
+  // An anchor whose daily entry was deleted is reported, without dropping the lesson.
+  let lessons = emptyLessons()
+  lessons = addManualLesson(lessons, { section: 'exp', text: '这个仓库要先构建客户端', scope: '全局' }, { date: '2026-11-10' }).text
+  lessons = applyLessonSuggestions(lessons, [
+    { section: 'exp', text: '重启后要确认注入段真的出现', scope: '全局', anchor: { date: '2026-11-10', session: 'session-aaaa1111', note: '注入段没出现' } },
+  ], { date: '2026-11-10' }).text
+  const gone = describeLessons(lessons, { dailyText: () => '# 2026-11-10\n\n## 观察\n- 其他内容\n' })
+  const goneRow = gone.find((section) => section.key === 'exp').entries.find((entry) => entry.text.includes('注入段'))
+  assert.strictEqual(goneRow.anchorGone, true)
+  const kept = describeLessons(lessons, { dailyText: () => '注入段没出现' })
+  assert.strictEqual(kept.find((section) => section.key === 'exp').entries.find((entry) => entry.text.includes('注入段')).anchorGone, false)
+})
+
+ok('lessons: consequence signals come from failures, corrections, and rework', () => {
+  const cards = [{
+    observations: [
+      { kind: 'correction', text: '用户要求先别改，先复现', evidence: '2026-11-11/session-aaaa1111' },
+      { kind: 'style', text: '喜欢简短回复', evidence: '' },
+    ],
+    unresolved: ['测试还是失败，需要再看日志'],
+    self: [{ event: '我直接改了代码', judgment: '我认为应该先复现', evidence: '' }],
+    lessons: [],
+  }]
+  const sessions = [{ id: 'session-aaaa1111-0000', messages: [{ role: 'assistant', text: '命令 exit code 1，构建失败' }] }]
+  const signals = detectConsequenceSignals(cards, sessions, '2026-11-11')
+  const kinds = new Set(signals.map((signal) => signal.kind))
+  assert.ok(kinds.has('correction'))
+  assert.ok(kinds.has('unresolved'))
+  assert.ok(kinds.has('tool'))
+  assert.ok(signals.every((signal) => signal.text.length <= 160))
+  assert.ok(signals.some((signal) => signal.evidence === '2026-11-11/session-aaaa1111'))
+  assert.deepStrictEqual(detectConsequenceSignals([], [], '2026-11-11'), [])
+})
+
+ok('lessons: injection order, budget sharing, and the 40% ceiling', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-lessons-inject-'))
+  const paths = {
+    root: dir,
+    profileFile: path.join(dir, 'profile.md'),
+    personaFile: path.join(dir, 'persona.md'),
+    lessonsFile: path.join(dir, 'lessons.md'),
+  }
+  // Long enough to blow past 40 % of a 1000 character budget.
+  let lessons = emptyLessons()
+  for (const sentence of [
+    '删任何文件之前先确认解析后的绝对路径，再把这一行写进日志，最后才执行删除，不要凭相对路径直接删目录；这条在删历史备份时尤其重要；写的时候把具体路径和命令也记下来',
+    '改配置之前先把原文件复制到 history，改完对照确认只有预期字段变了，避免无从回滚也看不出改了哪里；这条在改 cordis 配置时尤其重要；写的时候把具体路径和命令也记下来',
+    '发布之前先看一遍 diff 里有没有密钥、本机绝对路径和临时调试语句，确认干净再推送，不要把调试残留带出去；这条在发 npm 包时尤其重要；写的时候把具体路径和命令也记下来',
+    '迁移数据之前先量一遍体积和行数，记录在日报里，再决定分批还是一次做完，别直接拿生产库当试验场试手；这条在动 DSH 状态文件时尤其重要；写的时候把具体路径和命令也记下来',
+    '动权限之前先把原始 ACL 完整抄一份到日报，改完逐条对照，确认没有多给的权限留下来再结束这一步；这条在改宿主目录时尤其重要；写的时候把具体路径和命令也记下来',
+  ]) {
+    lessons = addManualLesson(lessons, { section: 'rule', text: sentence, scope: '全局' }, { date: '2026-11-09' }).text
+  }
+  fs.writeFileSync(paths.lessonsFile, lessons, 'utf8')
+
+  const config = composeConfig({}, { promptBudgetChars: 1000 })
+  const alone = renderLayers(paths, config, {})
+  const whole = renderLessonsInjection(lessons, 10000, {})
+  assert.ok(whole.length > 400, 'the lessons text alone is longer than the ceiling')
+  assert.ok(alone.allocations.lessons <= 400, 'the lessons layer is capped at 40 % even when the rest is empty')
+  assert.ok(alone.layers.lessons.chars > 300, 'it still uses most of that ceiling')
+  assert.ok(alone.layers.lessons.chars < whole.length, 'the cap really truncated it')
+
+  // A long profile with no persona gets the persona's unused share. The sentences
+  // must stay distinct or the merge folds them into one entry.
+  let profile = emptyProfile(PROFILE_SECTIONS, '用户画像')
+  const preferences = [
+    '偏好先给结论，再展开细节，不要先铺垫背景',
+    '要求每一步都给出可执行的验证方式，不接受笼统描述',
+    '希望助手自己处理细节，不要逐步确认每个动作',
+    '重视结论有来源，没读过的内容要明确标出来',
+    '对机械味的表达敏感，讨厌预设身份带来的表演感',
+    '喜欢用熟悉的数据库类型作类比理解新概念',
+    '会在执行前先问清楚权限边界，确认能不能动',
+    '把长期行为模式和暂时状态分开看，证据不足就放候选',
+    '任务指令很短，期待助手自己补全操作细节',
+    '在意结果是否真的写进文件，而不只是口头承诺',
+    '要求失败时保留原始输出，方便定位问题',
+    '偏好把复杂解释压缩成一两句判断来确认理解',
+    '喜欢把风险先说在前面，再谈收益和方案',
+    '关注跨工作区和重启之后上下文能否延续',
+    '希望测试和提交一起做完，不要留下半成品',
+    '要求文档写清楚限制和已知边界，不要夸大能力',
+  ]
+  for (const [index, text] of preferences.entries()) {
+    profile = applySuggestions(profile, PROFILE_SECTIONS, [
+      { kind: 'preference', text: `${text}；这一条在多次对话里都出现过，值得固定下来`, confidence: 0.8, evidence: `2026-11-10/p${index + 1}` },
+    ], { date: '2026-11-10' }).text
+  }
+  fs.writeFileSync(paths.profileFile, profile, 'utf8')
+  const shared = renderLayers(paths, config, {})
+  assert.ok(shared.allocations.profile > 550, 'the empty persona layer hands its share to the profile')
+  assert.ok(shared.layers.profile.chars > 550)
+
+  // Order in the prompt: lessons → profile → persona (the facts layer is a placeholder).
+  fs.writeFileSync(paths.personaFile, [
+    '---', 'version: 1', 'updatedAt: 2026-11-10T00:00:00.000Z', 'title: 助手性格', '---', '',
+    '## 我认为我是谁',
+    '- [core-1] [置信度 0.90] [最后验证 2026-11-10] 我意识到先给结论更省他时间（证据：2026-11-09/session-a、2026-11-10/session-b、2026-11-11/session-c）',
+    '', '## 我和你相处时的样子', '', '## 还没想清楚的', '',
+  ].join('\n'), 'utf8')
+  const text = buildSectionText(paths, config, {})
+  const lessonsAt = text.indexOf('## 教训（')
+  const profileAt = text.indexOf('## 与用户协作的已知偏好')
+  const personaAt = text.indexOf('## 我是谁')
+  assert.ok(lessonsAt > 0 && profileAt > lessonsAt && personaAt > profileAt, 'lessons come before the profile, the profile before the persona')
+  assert.ok(text.length <= 1000 + 80, 'the whole block stays near the budget (heading overhead aside)')
+
+  fs.writeFileSync(paths.lessonsFile, '', 'utf8')
+  const without = buildSectionText(paths, config, {})
+  assert.ok(!without.includes('## 教训（'))
+  assert.ok(without.includes('## 与用户协作的已知偏好'))
 })
 
 await Promise.all(pending)

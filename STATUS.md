@@ -1,19 +1,20 @@
 # dsh-persona-memory — 项目状态（交接用）
 
-> 更新时间：**2026-11-11 12:20**。当前版本：**0.2.9**（46 项测试全过，**待重启生效**）。
-> compact 后先读 **§0 → §1 → §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§21 是之后发生的事。
+> 更新时间：**2026-11-11 16:40**。当前版本：**0.3.0**（57 项测试全过，**待重启生效**）。
+> compact 后先读 **§0 → §1 → §22（教训层）→ §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§22 是之后发生的事。
 
 ---
 
 ## 0. 一句话
 
-DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 → 增量维护**用户画像**（profile.md）与**我的自述**（persona.md，第一人称、从对话里长出来、按证据累积）→ 每轮对话注入 → 自带设置页可看可调。已发布到 GitHub，收录 PR 在审。
+DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 → 增量维护**用户画像**（profile.md）、**我的自述**（persona.md，第一人称、从对话里长出来、按证据累积）和**教训**（lessons.md，铁律 / 时效经验 / 已作废，只追加、只作废）→ 每轮对话按 `事实(占位) → 教训 → 画像 → 自述` 注入 → 自带设置页可看可调。已发布到 GitHub，收录 PR 在审。
 
 ## 1. 当前状态
 
 - 包：`D:\dsh-persona-memory`；profile `desktop` 以 `link:` 安装（`dsh.profile.bundles` 含 `dsh-persona-memory`）。
-- 版本 **0.2.9**（0.2.1 → … → 0.2.9，跨 11-10 / 11-11）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
-- 测试：`node test/run.mjs` → **46 项全过**；`node --check lib/*.js` 全过。
+- 版本 **0.3.0**（0.2.1 → … → 0.3.0，跨 11-10 / 11-11）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
+- 测试：`node test/run.mjs` → **57 项全过**；`node --check lib/*.js` 全过。
+- **0.3.0 新增教训层**（§22）：`lessons.md` + 日报 `## 可疑雷点` + 设置页「教训」卡片 + 注入顺序/预算改版。第一次跑完日更才会出现 `lessons.md`。
 - 0.2.5 已实测：6 个会话 → 18 条 self notes，日报的 `## 我的判断` 正常落盘；但**自述合并失败**（`persona: no JSON object`），已在 0.2.6 修（见 §18）。
 - **0.2.6 已实测通过**（18:16–18:26 那轮）：6 会话 → `persona: +5 ~0 ↑0 ↓0 x0 (v3)`，第一次解析就成功、没走重试；日报证据变成 `2026-11-10/session-7b3c4fb6` 等**5 个不同会话**；`persona.md` 出现 5 条第一人称自述。
 - **注入段仍然为空**（`我认为我是谁 0 / 我和你相处时的样子 0 / 还没想清楚的 5`）：每条自述只被 1–2 个会话支持、日期只有 1 天，达不到「3 会话 / 再 +3 日期」的门槛。这是设计，不是 bug —— 要等后续几天的对话把同一条自述重复出来。
@@ -41,12 +42,13 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 |---|---|---|
 | `lib/index.js` | 插件入口 | `apply()` 注册 6 个工具、注入段、HTTP 路由、60s 定时器 + 45s 启动补跑；`config` 是 `let`，设置页改完即时生效；`runOnce()` 负责锁/状态/记录 |
 | `lib/config.js` | 配置 | `DEFAULTS`、`EDITABLE_KEYS`、`resolveConfig`（校验 + scheduleMinutes）、`composeConfig`（DEFAULTS → 补丁行 → config.json）、`loadOverrides`/`saveOverrides`、`publicConfig` |
-| `lib/digest.js` | 三段 LLM 管线 | stage1 每会话一卡（`cites` 引用消息号）、stage2 日报、stage3 画像建议、`personaStage`（读近 N 天日报 + 当日卡片）；`callLlm` 带超时；`parseDailyObservations` |
-| `lib/profile.js` | 文档解析/合并 | `parseProfile`/`serialize`/`readMeta`；证据 `parseEvidence`/`formatEvidence`/`evidenceStats`；`applySuggestions`（画像）；`applyPersonaSuggestions`（性格升降级 + supersedes + 衰减） |
-| `lib/history.js` | 备份与回滚 | `backupDocument`、`listHistory`、`restoreHistory`（回滚前先备份当前，可逆；文件名正则校验防穿越） |
-| `lib/http.js` | 回环路由 | `registerRoutes`（7 条）、`readJsonBody`（128KB 上限）、`describeDocument`/`documentsPayload`；全部仅回环，方法不符 405 |
-| `lib/state.js` | 调度状态 | `loadState`（去 BOM、解析失败回调）、`saveState`、`recordRun`（含 profile/persona 摘要）、`statusOf`、锁（10 分钟陈旧）、`createLogger`（jsonl 审计） |
-| `lib/inject.js` | 注入段 | 预算 1200 字符按 70/30 切分；带 `<!-- persona-memory:do-not-digest -->` 标记防回环 |
+| `lib/digest.js` | 三段 LLM 管线 | stage1 每会话一卡（`cites` 引用消息号、`lessons` 候选）、stage2 日报（含 `lessons` → `## 可疑雷点`）、stage3 画像建议、`personaStage`（读近 N 天日报 + 当日卡片）、`lessonsStage`（候选 + 后果信号 + 已有教训原文，**不读 persona.md**）；`callLlm` 带超时；`parseDailyObservations`/`parseDailyLessons`/`detectConsequenceSignals` |
+| `lib/lessons.js` | 教训文档（操作层） | `parseLessons`/`assertAppendOnly`；行级手术 `appendLesson`/`archiveLesson`/`approveLesson`/`replaceLesson`；`applyLessonSuggestions`（上限 5/5、exp 合并 0.85、90 天作废、铁律转待确认）；`conflictPairs`（同 scope + 极性相反 + 相似度 ≥0.4）；`renderLessonsInjection`；`consecutiveEmptyDays` |
+| `lib/profile.js` | 文档解析/合并 | `parseProfile`/`serialize`/`readMeta`；证据 `parseEvidence`/`formatEvidence`/`evidenceStats`；`applySuggestions`（画像）；`applyPersonaSuggestions`（性格升降级 + supersedes + 衰减）；三段注入渲染的逐行预算判断都按「拼接后的真实长度」算，不再多扣 1 字符 |
+| `lib/history.js` | 备份与回滚 | `backupDocument`、`listHistory`、`restoreHistory`（回滚前先备份当前，可逆；文件名正则校验防穿越）；`HISTORY_DOCS = profile/persona/lessons` |
+| `lib/http.js` | 回环路由 | `registerRoutes`（12 条，含 4 条 `lessons/*`）、`readJsonBody`（128KB 上限）、`describeDocument`/`describeLessons`/`documentsPayload`；全部仅回环，方法不符 405 |
+| `lib/state.js` | 调度状态 | `loadState`（去 BOM、解析失败回调）、`saveState`、`recordRun`（含 profile/persona/lessons 摘要）、`statusOf`、锁（10 分钟陈旧）、`createLogger`（jsonl 审计） |
+| `lib/inject.js` | 注入段 | `planBudget`（基线 55/25/20，教训上限 40%，空层额度让渡）、`renderLayers`（面板和提示词共用同一份结果）、`buildSectionText`（顺序 教训 → 画像 → 自述，事实层占位）；带 `<!-- persona-memory:do-not-digest -->` 标记防回环 |
 | `lib/collector.js` | 采集 | 扫 `$DSH_HOME/sessions/<ws>/<session>/session.v4.jsonl.zstd`；多帧 zstd 按魔数切帧；过滤注入消息与自身标记 |
 | `lib/util.js` | 工具 | `readText`（去 BOM）、`writeTextAtomic`、`readJson`、`parseTimeOfDay`、`similarity`（二元组重合）、`todayKey` |
 | `lib/client.js` | 设置页（浏览器半侧） | `window.__ModuleLoader__.load` CJS 工厂；注册 `settings.section`（id `persona-memory`，order 60）；轮询 15s 出运行横幅；乐观开关 + 静默保存；样式只用真实主题变量 |
@@ -427,3 +429,77 @@ persona: +5 ~0 ↑0 ↓0 x0 (v3)          ← 第一次就解析成功，没走�
 2. 「我的自述」卡片：`我认为我是谁 0 / 我和你相处时的样子 0 / 还没想清楚的 5` → 第三区显示 3 条 + 「展开全部（5）」，能展开能收起。
 3. 画像卡片行为不变（10/9/7 折，雷区 3 条不折，手动锁定不折）。
 4. 折叠前后「当前注入」那句数字不变（现在仍是「当前注入为空」）。
+
+## 22. v0.3.0 —— 教训层（操作层：上次怎么翻车、下次改哪一步）
+
+画像/自述回答「你是谁 / 我是谁」，教训回答「**该怎么做**」。它常驻注入，所以少而硬，而且**只追加、只作废、不改写** —— 这条不是文档约定，是 `assertAppendOnly` 在每次写盘前后逐条比对（id / 原句 / 作用域 / 锚点），任何一条变了就**拒绝写入**（返回上一次的文本，不落盘）。
+
+### 文件与分区（`lib/lessons.js`，`$DSH_HOME/persona-memory/lessons.md`）
+
+| 区 | key | 上限 | 衰减 | 合并 | 推翻 | 增删 |
+|---|---|---|---|---|---|---|
+| 铁律 | rule | 5（生效的） | 永不 | 不合并 | 系统不可推翻 | 只有人；**人批准才生效** |
+| 时效经验 | exp | 5 | 90 天无确认 → 作废 | 同坑相似度 ≥0.85 合并（只刷新确认日） | 可被 `invalidates` 证伪 | 系统可作废，人能作废 |
+| 已作废 | archive | 不限 | — | — | — | 只追加，可回看（面板倒序） |
+
+条目行：`- [rule-1] [作用域 全局] [确认 2026-11-11] [适用 v0.3.0] 原句（锚点：日期/session-xxxx · 日报里那句话）`。已作废行多 `[作废 日期] [原因 …]`，**原句和原 id 都不变**。
+
+**待确认没做成第四个分区**：它就在「铁律」区里，带 `[待确认]` 标记，不计入 5 条上限、永不注入；批准 = 去掉标记 + 写确认日，批准前若已满 5 条会被拒绝。这样文件保持三个区，而「先生成到待确认、人批准才进池」的要求照样落地。
+
+### 三个入口
+
+1. **每日自问**：stage2 的 JSON 加了 `lessons`，写进日报 `## 可疑雷点`；空答写 `（无）`，面板据此算「连续空答天数」（今天跳过，因为今天的日报还没生成；没有这个区、早于本功能的旧日报算「没问过」，会中断计数而不是算空答）。
+2. **后果回溯**：`detectConsequenceSignals` 机械扫四类信号（工具失败 / 用户当场纠正 / 返工 / 未解决失败）。有信号时同一轮把**最近三天日报原文**也塞进 `lessonsStage` 的输入。
+3. **用户兜底**：stage1 的 JSON 也加了 `lessons`（「记一下」就落在这里），**没有新增工具**；候选随日报落盘，`persona_note` 语义没动。
+
+### lessonsStage 与裁决
+
+- 输入：当日候选 + 后果信号 +（有信号时）日报原文 + **已有教训原文**。**绝不读 `persona.md`**（写教训时看人格，条目会被人格修饰）—— 有一条测试专门断言：同一次运行里 persona 阶段读到了 `MARKER-PERSONA`，教训阶段的 system/user prompt 里都没有。
+- 输出：`{section, text, scope, anchor, invalidates, invalidReason}`。分区规则写进提示词：依赖任务属性（规模/可逆/破坏性）→ rule，依赖环境属性（版本/路径/API 形状）→ exp；铁律自检「违反会不会造成不可逆后果」，只是返工就进 exp。
+- 代码裁决：铁律**一律先落待确认**（staging 上限 5）；exp 近重复合并、满 5 条后新条只留日报；90 天无确认作废并进 archive；`invalidates` 只对 exp 生效。
+
+### 冲突
+
+`conflictPairs`：同 scope + 极性相反（「必须/一定要…」vs「不要/别/禁止…」）+ 文本相似度 ∈ [0.4, 0.85)。命中就标 `[冲突]`，面板可见、注入行保留标记，**但代码不裁决、不删任何一条**。处理归自述；自述两区目前为空，所以注入里额外一行软默认「动手前先问一次」—— 一旦自述有内容，这一行自动消失（`askOnConflict` 只在 persona 渲染为空时传）。
+
+### 注入
+
+顺序改成 `事实（未实现，占位）→ 教训 → 画像 → 自述`。预算用 `planBudget`：先按「给足预算时各层要多少」量一遍，基线 画像 55 / 教训 25 / 自述 20，用不完的额度按 画像 → 自述 → 教训 的顺序给仍被截断的层，**教训硬上限 40%**。面板的「当前注入 N 条」和提示词走同一个 `renderLayers`，不会再各算一套。
+
+顺手修了个真 bug：三层渲染的逐行预算判断原来都多扣 1 字符（`used + line.length + 1 > maxChars`），内容刚好等于预算时整段被丢掉 —— 自述层实测就吃过这个（41 字符预算、41 字符内容，渲染出 0）。现在按「拼接后的真实长度」判断。
+
+作用域 v1 只有两档：当前工作区（cwd）+ 全局，`scopeMatches` 归一化斜杠/大小写/尾部分隔符；拿不到 cwd 时工作区教训**不注入**（宁漏勿滥）。关键词语义匹配明确不实现。
+
+### 设置页
+
+独立的「教训」卡片（不塞进画像）：三个分区列表（已作废默认折 3 条）、作用域 / 锚点 / 确认日 / 冲突 / 待确认标记；手动新增（铁律 or 时效经验 + 作用域）、否决（**必填原因**，行内输入 + 确认）、替换（仅铁律，行内编辑 + 二次确认）、批准（只在待确认行出现）。卡片显示连续空答天数、待确认铁律条数、当前注入条数；**只展示，不自动做任何动作**。
+
+### 测试（46 → 57）
+
+- append-only：四次合并后 id / 原句不变、只动确认日；故意改一个字、删一条都会被 `assertAppendOnly` 抓到。
+- 铁律：400 天后仍在（不衰减）、近重复不合并、`invalidates: rule-x` 无效、不能加重复条目。
+- 上限：手加 5 条后第 6 条被拒；系统提议的铁律进待确认且批准会被上限挡住；exp 满 5 条后第 6 条只留日报。
+- 90 天：第 90 天作废、原句进 archive、原因含「90 天无确认」；中间确认过就不过期。
+- 人工路径：批准 / 替换（旧句进 archive，原因「人工替换」）/ 否决（无原因被拒）；每一步都断言 append-only。
+- 作用域：`D:\repo-a` 与 `d:/repo-a/` 命中，`repo-b` 与空 cwd 不命中；全局始终命中。
+- 冲突：一对相反条目被标 `[冲突]`、两行都还在注入里、带软默认那行；`askOnConflict` 不传时没有软默认行。
+- 日报：`## 可疑雷点` 写出/读回一致、`（无）` 不被当条目、连续空答天数只算完整的天、锚点条目被删时 `anchorGone=true` 且教训保留。
+- 注入：顺序 教训 < 画像 < 自述；只剩教训时分配正好被 40% 截断，画像长而自述空时画像拿到让渡的额度。
+- lessonsStage：同一次运行里 persona 读到了 marker，教训 prompt 没有；候选落进了 `lessons.md`。
+- 路由：`lessons/add` 重复 400、`GET` 405、`reject` 无原因 400、非回环 403、`replace` 后 archive 里有旧句、每次改写前都有 history 备份。
+- 客户端：教训卡片渲染（注入条数、空答天数、待确认、冲突、作废原因）、批准/否决/替换/新增各自的 POST body 正确、否决在填原因前不能确认。
+
+### 验证步骤（0.3.0，需重启）
+
+1. 重启 → 状态卡 `v0.3.0`；`GET /persona-memory/status` 里 `stats.lessons` 存在。
+2. 设置 → 记忆与画像：出现独立的「教训」卡片（三个区都空 → 显示「还没有教训」+ 新增行）。
+3. 手动新增一条铁律 → 立刻出现在「铁律」区；再点「否决」不填原因 → 确认按钮禁用；填原因后确认 → 进「已作废」且原因可见。
+4. 跑一次日更（或等 17:00）→ 日报末尾出现 `## 可疑雷点`；`lessons.md` 出现（如果模型给了候选）；系统提议的铁律带「待确认」，点「批准」才进生效池。
+5. 看注入：新对话里 `## 教训（…）` 应出现在画像段之前；「当前注入」数字与面板一致。
+6. 自述两区仍为空（预期），注入里仍没有自述段。
+
+### 已知限制
+
+- 宿主是否每轮重建系统提示词尚未确认（`dsh-system-prompt` 在 `app.asar` 里，没读到源码）。`buildSectionText` 先取上下文 `cwd`，取不到用宿主进程 cwd：**全局教训总注入，工作区教训可能不注入**。这是保守取舍。
+- 冲突检测是机械扫描，会漏掉换个说法的相反条目；标错不删任何东西。
+- 教训不做历史回填，从启用开始积累。
