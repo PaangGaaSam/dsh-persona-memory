@@ -528,12 +528,23 @@ ok('client bundle registers a settings section and renders the loaded panel', as
             { kind: 'style', text: '第四条应当被折叠', confidence: 0.5, evidence: '2026-11-10/s4' },
             { kind: 'style', text: '第五条也应当被折叠', confidence: 0.4, evidence: '2026-11-10/s5' },
           ], { date: '2026-11-10' }).text
-        })(), 'profile', { limit: 3, sort: true }),
+        })(), 'profile'),
         stats: { counts: {}, pinned: 0 },
       },
       persona: {
         text: '',
-        sections: describeDocument(emptyProfile(PERSONA_SECTIONS, '助手性格'), 'persona'),
+        sections: describeDocument((() => {
+          let text = emptyProfile(PERSONA_SECTIONS, '助手性格')
+          text = applyPersonaSuggestions(text, PERSONA_SECTIONS, [
+            { section: 'candidate', text: '自述一', confidence: 0.9, evidence: '2026-11-08/s1' },
+            { section: 'candidate', text: '自述二', confidence: 0.7, evidence: '2026-11-10/s2' },
+            { section: 'candidate', text: '自述三', confidence: 0.6, evidence: '2026-11-10/s3' },
+            { section: 'candidate', text: '自述四被折起来', confidence: 0.5, evidence: '2026-11-10/s4' },
+            { section: 'candidate', text: '自述五被折起来', confidence: 0.4, evidence: '2026-11-10/s5' },
+          ], { date: '2026-11-10' }).text
+          // Persona rows can be pinned too; the pin must float above the fold.
+          return setPinned(text, PERSONA_SECTIONS, 'cand-1', true, { title: '助手性格' }).text
+        })(), 'persona'),
         stats: { counts: {}, pinned: 0 },
         injected: { enabled: true, count: 0, chars: 0 },
       },
@@ -659,7 +670,7 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   assert.ok(rendered.some((text) => text.includes('喜欢先给结论')), 'renders a profile entry')
   assert.ok(rendered.some((text) => text.includes('# 今天')), 'renders the latest daily note')
 
-  // Profile sections fold to three rows; the user-locked list never folds, so its
+  // Both documents fold to three rows; the user-locked list never folds, so its
   // four rows are all on screen without an expander of its own.
   const rerender = () => {
     rendered.length = 0
@@ -667,9 +678,13 @@ ok('client bundle registers a settings section and renders the loaded panel', as
     render({ type: component, props: { t: translate } })
   }
   const foldButtons = () => elements.filter((element) => element.type === 'button' && typeof element.props.children === 'string' && element.props.children.startsWith('展开全部'))
-  assert.strictEqual(foldButtons().length, 1, 'only the folded profile section gets an expander')
+  assert.strictEqual(foldButtons().length, 2, 'the profile style section and the persona candidate section each offer an expander')
   assert.ok(!rendered.some((text) => text.includes('第四条应当被折叠')), 'row four is folded away')
   assert.ok(!rendered.some((text) => text.includes('第五条也应当被折叠')), 'row five is folded away')
+  // persona folds the same way, and its pinned row is above the fold.
+  assert.ok(rendered.some((text) => text.includes('自述一')), 'the pinned persona row is visible')
+  assert.ok(!rendered.some((text) => text.includes('自述四被折起来')), 'persona row four is folded away')
+  assert.ok(!rendered.some((text) => text.includes('自述五被折起来')), 'persona row five is folded away')
   assert.ok(rendered.some((text) => text.includes('不要用「您」')), 'the user-locked list is never folded')
   assert.ok(rendered.some((text) => text.includes('引用要给出处')), 'all four locked rows render')
   foldButtons()[0].props.onClick()
@@ -681,6 +696,17 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   collapseButton.props.onClick()
   rerender()
   assert.ok(!rendered.some((text) => text.includes('第四条应当被折叠')), 'collapsing folds it back')
+
+  // The persona expander behaves the same way.
+  assert.strictEqual(foldButtons().length, 2)
+  foldButtons()[1].props.onClick()
+  rerender()
+  assert.ok(rendered.some((text) => text.includes('自述四被折起来')), 'persona expands too')
+  const personaCollapse = elements.filter((element) => element.type === 'button' && element.props.children === '收起').pop()
+  assert.ok(personaCollapse !== undefined)
+  personaCollapse.props.onClick()
+  rerender()
+  assert.ok(!rendered.some((text) => text.includes('自述四被折起来')), 'persona collapses too')
 
   // The identity block: five fields, its basis can be opened, and the count of
   // entries left below the threshold is shown.
@@ -1325,7 +1351,8 @@ ok('extractJson survives raw newlines, trailing commas, and a broken leading obj
   assert.deepStrictEqual(extractJson(twoSpans).add, [{ text: '我记住了' }])
 })
 
-ok('profile sections preview three rows, pinned first, and only the profile folds', () => {
+ok('both documents fold to three rows, pinned first, and the locked list does not', () => {
+  // profile: five style rows over two days, the oldest pinned.
   let text = emptyProfile(PROFILE_SECTIONS, '用户画像')
   text = applySuggestions(text, PROFILE_SECTIONS, [
     { kind: 'style', text: '最早但最自信', confidence: 0.95, evidence: '2026-11-09/a' },
@@ -1339,7 +1366,8 @@ ok('profile sections preview three rows, pinned first, and only the profile fold
   text = appendLockedEntry(text, PROFILE_SECTIONS, '不要用「您」', { date: '2026-11-10' }).text
   text = setPinned(text, PROFILE_SECTIONS, 'style-1', true, { title: '用户画像' }).text
 
-  const sections = describeDocument(text, 'profile', { limit: 3, sort: true })
+  // No options: folding and sorting are the defaults now.
+  const sections = describeDocument(text, 'profile')
   const style = sections.find((section) => section.key === 'style')
   assert.strictEqual(style.total, 5)
   assert.strictEqual(style.limit, 3)
@@ -1350,8 +1378,39 @@ ok('profile sections preview three rows, pinned first, and only the profile fold
   const locked = sections.find((section) => section.key === 'locked')
   assert.strictEqual(locked.limit, 0, 'the user-locked list never folds')
   assert.strictEqual(locked.entries.length, 1)
-  // The persona document is untouched by this feature.
-  assert.ok(describeDocument(emptyProfile(PERSONA_SECTIONS, '助手性格'), 'persona').every((section) => section.limit === 0))
+
+  // persona: five candidates on three days, the oldest pinned. Same rules apply —
+  // persona entries can be pinned too, so leaving it unsorted would hide them.
+  let persona = emptyProfile(PERSONA_SECTIONS, '助手性格')
+  persona = applyPersonaSuggestions(persona, PERSONA_SECTIONS, [
+    { section: 'candidate', text: '最早的一条自述', confidence: 0.9, evidence: '2026-11-08/s1' },
+  ], { date: '2026-11-08' }).text
+  persona = applyPersonaSuggestions(persona, PERSONA_SECTIONS, [
+    { section: 'candidate', text: '较新的一条', confidence: 0.6, evidence: '2026-11-10/s2' },
+    { section: 'candidate', text: '较新的二条', confidence: 0.7, evidence: '2026-11-10/s3' },
+    { section: 'candidate', text: '较新的三条', confidence: 0.5, evidence: '2026-11-10/s4' },
+    { section: 'candidate', text: '较新的四条', confidence: 0.4, evidence: '2026-11-10/s5' },
+  ], { date: '2026-11-10' }).text
+  persona = setPinned(persona, PERSONA_SECTIONS, 'cand-1', true, { title: '助手性格' }).text
+  const personaSections = describeDocument(persona, 'persona')
+  const candidates = personaSections.find((section) => section.key === 'candidate')
+  assert.strictEqual(candidates.total, 5)
+  assert.strictEqual(candidates.limit, 3, 'persona folds exactly like the profile')
+  assert.strictEqual(candidates.entries[0].pinned, true, 'pinned persona rows float to the top')
+  assert.strictEqual(candidates.entries[0].text, '最早的一条自述')
+  assert.deepStrictEqual(candidates.entries.slice(1).map((entry) => entry.text), ['较新的二条', '较新的一条', '较新的三条', '较新的四条'])
+  assert.ok(personaSections.every((section) => section.key === 'candidate' || section.limit === 3))
+
+  // Three rows or fewer can never fold: the page shows no expander for them.
+  assert.strictEqual(describeDocument(emptyProfile(PERSONA_SECTIONS, '助手性格'), 'persona').every((section) => section.total <= section.limit), true)
+  const shortProfile = applySuggestions(emptyProfile(PROFILE_SECTIONS, '用户画像'), PROFILE_SECTIONS, [
+    { kind: 'preference', text: '一', confidence: 0.9, evidence: '2026-11-10/a' },
+    { kind: 'preference', text: '二', confidence: 0.8, evidence: '2026-11-10/b' },
+    { kind: 'preference', text: '三', confidence: 0.7, evidence: '2026-11-10/c' },
+  ], { date: '2026-11-10' }).text
+  const exact = describeDocument(shortProfile, 'profile').find((section) => section.key === 'preference')
+  assert.strictEqual(exact.total, 3)
+  assert.ok(exact.total <= exact.limit, 'a three-row section is not foldable')
 })
 
 ok('identity: only confident (or pinned) entries are used, and the rest are counted', () => {

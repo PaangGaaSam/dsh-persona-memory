@@ -1,7 +1,7 @@
 # dsh-persona-memory — 项目状态（交接用）
 
-> 更新时间：**2026-11-11 12:35**。当前版本：**0.2.8**（46 项测试全过，**待重启生效**）。
-> compact 后先读 **§0 → §1 → §20（身份块 + 分区折叠）→ §19 → §18 → §17 → §16（交接速览）**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§20 是之后发生的事。
+> 更新时间：**2026-11-11 12:20**。当前版本：**0.2.9**（46 项测试全过，**待重启生效**）。
+> compact 后先读 **§0 → §1 → §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§21 是之后发生的事。
 
 ---
 
@@ -12,7 +12,7 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 ## 1. 当前状态
 
 - 包：`D:\dsh-persona-memory`；profile `desktop` 以 `link:` 安装（`dsh.profile.bundles` 含 `dsh-persona-memory`）。
-- 版本 **0.2.8**（0.2.1 → … → 0.2.8，跨 11-10 / 11-11）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
+- 版本 **0.2.9**（0.2.1 → … → 0.2.9，跨 11-10 / 11-11）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
 - 测试：`node test/run.mjs` → **46 项全过**；`node --check lib/*.js` 全过。
 - 0.2.5 已实测：6 个会话 → 18 条 self notes，日报的 `## 我的判断` 正常落盘；但**自述合并失败**（`persona: no JSON object`），已在 0.2.6 修（见 §18）。
 - **0.2.6 已实测通过**（18:16–18:26 那轮）：6 会话 → `persona: +5 ~0 ↑0 ↓0 x0 (v3)`，第一次解析就成功、没走重试；日报证据变成 `2026-11-10/session-7b3c4fb6` 等**5 个不同会话**；`persona.md` 出现 5 条第一人称自述。
@@ -401,3 +401,29 @@ persona: +5 ~0 ↑0 ↓0 x0 (v3)          ← 第一次就解析成功，没走�
 2. 设置 → 记忆与画像 → 「用户画像」卡片：稳定偏好（10 条）只显示 3 条 + 「展开全部（10）」，沟通习惯、思维模式同理；雷区只有 3 条，**没有**展开按钮；「手动锁定」不折。
 3. 「身份块」卡片：现在是「尚未生成」；点「重新生成」→ 五个字段出结果、「依据（N）」点开能看到引用的原文、「另有 5 条低于阈值未计入」。
 4. 跑完一次日更后 `identity.json` 出现，`profile.md` 的字节不变；第二次运行日志里没有新的 `identity: generated`（版本没变会走缓存）。
+
+## 21. v0.2.9 —— 折叠改成统一默认（画像 + 自述）
+
+0.2.8 只让画像折叠、而且要靠显式 `{ limit: 3, sort: true }` 才生效；自述照旧全量展开、也不排序。这次把**默认**改成折叠 + 排序，两处调用都不再带 options，少一条"两个默认值分支"的隐患。
+
+- `describeDocument(text, doc, options = {})`：`limit` 缺省 `SECTION_PREVIEW_ROWS = 3`（显式传 0 仍可关掉），`sort` 缺省 true（只有显式传 `false` 才保留文档顺序）。`section.userLocked === true` 仍强制 0，不受默认值影响。
+- `documentsPayload` 两处调用简化成 `describeDocument(profileText, 'profile')` / `describeDocument(personaText, 'persona')`。
+- **persona 也必须排序**：`setPinned` 对 persona 同样生效，不排序的话被置顶的条目会留在折叠线下面 —— 打开「我的自述」只能看到三行，而最该看的那条被折了。
+- **折叠只影响面板显示**：`lib/inject.js`、`renderForInjection`、`renderPersonaInjection` 一行没动；`persona.injected`（「当前注入 N 条」）读的是 `persona.md` 文件，和分区视图无关，折叠前后不变。真实数据实测：persona 分区 `candidate 5 / limit 3`，`injected` 仍是 `{enabled:true, count:0}`。
+- 身份块（`lib/identity.js`）没加 limit，它不参与分区折叠。
+
+### 测试
+
+46 项仍全过，重写了那条预览测试（`both documents fold to three rows, pinned first, and the locked list does not`）：
+
+- 画像非锁定分区 `total 5 / limit 3`，五条顺序 = 置顶 → 验证时间 → 置信度；手动锁定 `limit: 0`。
+- **persona 同一套规则**：`total 5 / limit 3`，置顶的 `cand-1` 排第一，其余按时间再按置信度。
+- 条目数 ≤3 时 `total <= limit`（前端因此不会出现「展开全部」）——空 persona 与恰好 3 条的画像分区各断言一次。
+- 客户端 mock 同时给了两份文档的超长分区：断言出现**两个**展开按钮（画像 style + persona candidate），persona 的第四条折叠、点开后出现、点「收起」后再次消失。
+
+### 验证步骤（0.2.9）
+
+1. 重启 → 状态卡 `v0.2.9`。
+2. 「我的自述」卡片：`我认为我是谁 0 / 我和你相处时的样子 0 / 还没想清楚的 5` → 第三区显示 3 条 + 「展开全部（5）」，能展开能收起。
+3. 画像卡片行为不变（10/9/7 折，雷区 3 条不折，手动锁定不折）。
+4. 折叠前后「当前注入」那句数字不变（现在仍是「当前注入为空」）。
