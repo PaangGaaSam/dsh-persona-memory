@@ -137,7 +137,7 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
   - `git remote` 走 SSH：`git@github.com:PaangGaaSam/dsh-persona-memory.git`。
 - **打包校验**：`npm pack --dry-run` → 15 files / 39.8 kB，含 `lib/client.js` 与 `cordis.patch.yml`，装下来即可运行、**无需构建步骤**。
 - **依赖口径**：peer 从 6 个虚的裁到 3 个——`cordis`、`dsh-tools`（静态 import，必需）、`dsh-llm`（`try/catch` 动态 import 带兜底，标 optional）。范围用 `^0.2.1-rc.1`，否则 `*` 不匹配预发布宿主。
-- **dsh-market 收录**：条目 `data/plugins/PaangGaaSam__dsh-persona-memory.yml`，`category: memory`。仓库年龄门槛 1 天 —— 建于 2026-11-10 16:08（UTC+8），故 **2026-11-11 16:08 之后** gate 才会转绿。
+- **dsh-market 收录**：2026-11-11 16:47 已合并（维护者 `fkysly`）。条目 `data/plugins/PaangGaaSam__dsh-persona-memory.yml`，`category: memory`。仓库年龄门槛（建于 2026-11-10 16:08）按预期自愈，没有重新提交；维护者留言见 §16。
 
 ### 本机环境坑（复发时照这个绕）
 
@@ -202,10 +202,10 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 
 ### 发布进度
 
-- 仓库：<https://github.com/PaangGaaSam/dsh-persona-memory>（commit `98e17ef`，中英双 README，底部有求 star / 求反馈段）
-- 收录 PR：<https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/13895>（`add-persona-memory` 分支，1 file +6）
-- **当前 CI 状态**：`check` ✅ success；`Submission gate` ❌ 唯一原因「repository is 0.0 days old (needs 1)」。官方原文说会自动重跑、不要重新提交。**2026-11-11 16:08（北京）之后**应自行转绿。若没转绿，在 `PaangGaaSam/awesome-dsh-plugin` 的 `add-persona-memory` 分支推一个空提交即可重新触发。
-- 用户收到的「Submission gate 全部 job 失败」通知就是这个，已解释过，无需处理。
+- 仓库：<https://github.com/PaangGaaSam/dsh-persona-memory>（`main`，中英双 README，底部有求 star / 求反馈段）
+- **收录 PR 已合并**：<https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/13895>（2026-11-11 16:47 北京，维护者 `fkysly` 合并；条目 `data/plugins/PaangGaaSam__dsh-persona-memory.yml` 已在 `main`）。年龄门槛按预期自愈（仓库建于 2026-11-10 16:08），**没有推空提交**。
+- **维护者的合并留言（待拍板）**：他说本插件默认值会花 token，已把「每天 17:00 自动运行 / 最多 20 会话 / `deepseek-v4-pro` / 结果自动应用 / 最多 1200 字注入」写进市场描述；并注明包名 `dsh-persona-memory` 与 ifenc、Quophic 两个条目相同，只能装其中一个。他提出：**若把默认改成关闭自动运行，发新版后告诉他**，他删掉描述里那半句。
+- **市场描述已落后于代码**：描述只写「user profile + companion personality」，0.3.0 的教训层没有提 —— 要不要让他顺手改，等用户拍板。
 
 ### 三个未决事项（都有推荐，等用户拍板）
 
