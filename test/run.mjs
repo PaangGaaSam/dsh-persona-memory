@@ -7,6 +7,7 @@ import { collectSessions, decodeSessionLog, parseSessionLog } from '../lib/colle
 import { composeConfig, EDITABLE_KEYS, loadOverrides, publicConfig, saveOverrides } from '../lib/config.js'
 import { backupDocument, listHistory, restoreHistory } from '../lib/history.js'
 import { describeDocument, documentsPayload, personaInjection, readJsonBody, registerRoutes } from '../lib/http.js'
+import { ensureIdentity, identityInputs, parseIdentity, readIdentity } from '../lib/identity.js'
 import {
   appendLockedEntry,
   applyPersonaSuggestions,
@@ -25,7 +26,7 @@ import {
   setPinned,
 } from '../lib/profile.js'
 import { extractJson, parseCard, parseDaily, parseDailyObservations, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites } from '../lib/digest.js'
-import { PERSONA_HEADING } from '../lib/inject.js'
+import { PERSONA_HEADING, buildSectionText } from '../lib/inject.js'
 import { resolveDshHome } from '../lib/util.js'
 
 let passed = 0
@@ -184,6 +185,7 @@ if (fs.existsSync(sessionsRoot)) {
     dailyDir: path.join(tmp, 'daily'),
     profileFile: path.join(tmp, 'profile.md'),
     personaFile: path.join(tmp, 'persona.md'),
+    identityFile: path.join(tmp, 'identity.json'),
     stateFile: path.join(tmp, 'state.json'),
     lockFile: path.join(tmp, '.lock'),
     logDir: path.join(tmp, 'logs'),
@@ -219,6 +221,16 @@ if (fs.existsSync(sessionsRoot)) {
           out = JSON.stringify({ summary: ['完成了 v0.1 骨架'], unresolved: ['重启后验证'], observations: [{ kind: 'style', text: '喜欢直接看到结果', confidence: 0.7 }] })
         } else if (system.includes('用户画像编辑')) {
           out = JSON.stringify({ add: [{ kind: 'style', text: '喜欢先给结论再展开细节', confidence: 0.8, evidence: '2026-11-10/s' }] })
+        } else if (system.includes('工作画像归纳器')) {
+          out = JSON.stringify({
+            fields: {
+              role: { text: '大概率在做需要自己动手排障的开发或平台工作', basis: ['style-1'] },
+              domain: { text: '插件与工具链', basis: ['style-1'] },
+              stack: { text: '', basis: [] },
+              workflow: { text: '先跑通再谈优化', basis: ['style-1'] },
+              impression: { text: '', basis: [] },
+            },
+          })
         } else {
           out = JSON.stringify({ add: [{ section: 'core', text: '我第一次接手这个插件时想先跑测试再重启，所以现在默认先验证', confidence: 0.6, evidence: '2026-11-10/s' }] })
         }
@@ -239,6 +251,12 @@ if (fs.existsSync(sessionsRoot)) {
     assert.ok(fs.readFileSync(paths.profileFile, 'utf8').includes('喜欢先给结论再展开细节'))
     const persona = fs.readFileSync(paths.personaFile, 'utf8')
     assert.ok(persona.includes('我第一次接手这个插件时想先跑测试再重启'))
+    // The identity block is generated from the profile written above, and it is
+    // cached beside it (never inside it).
+    assert.strictEqual(report.identity.generated, true)
+    const identity = JSON.parse(fs.readFileSync(paths.identityFile, 'utf8'))
+    assert.strictEqual(identity.profileVersion, report.profile.version)
+    assert.ok(identity.fields.role.text.length > 0)
     const now = new Date()
     const localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     assert.strictEqual(state.lastPersonaRunDay, localDay)
@@ -494,9 +512,23 @@ ok('client bundle registers a settings section and renders the loaded panel', as
     documents: {
       profile: {
         text: '',
-        sections: describeDocument(applySuggestions(emptyProfile(PROFILE_SECTIONS, '用户画像'), PROFILE_SECTIONS, [
-          { kind: 'style', text: '喜欢先给结论', confidence: 0.8, evidence: '2026-11-10/s' },
-        ], { date: '2026-11-10' }).text, 'profile'),
+        sections: describeDocument((() => {
+          let text = emptyProfile(PROFILE_SECTIONS, '用户画像')
+          text = appendLockedEntry(text, PROFILE_SECTIONS, '不要用「您」', { date: '2026-11-09' }).text
+          text = appendLockedEntry(text, PROFILE_SECTIONS, '结论写在第一行', { date: '2026-11-09' }).text
+          text = appendLockedEntry(text, PROFILE_SECTIONS, '不要加寒暄', { date: '2026-11-09' }).text
+          text = appendLockedEntry(text, PROFILE_SECTIONS, '引用要给出处', { date: '2026-11-09' }).text
+          return applySuggestions(text, PROFILE_SECTIONS, [
+            { kind: 'preference', text: '偏好一', confidence: 0.9, evidence: '2026-11-10/p1' },
+            { kind: 'preference', text: '偏好二', confidence: 0.8, evidence: '2026-11-10/p2' },
+            { kind: 'preference', text: '偏好三', confidence: 0.7, evidence: '2026-11-10/p3' },
+            { kind: 'style', text: '喜欢先给结论', confidence: 0.8, evidence: '2026-11-10/s' },
+            { kind: 'style', text: '夹在中间的一条', confidence: 0.7, evidence: '2026-11-10/s2' },
+            { kind: 'style', text: '第三条刚好还在前三', confidence: 0.6, evidence: '2026-11-10/s3' },
+            { kind: 'style', text: '第四条应当被折叠', confidence: 0.5, evidence: '2026-11-10/s4' },
+            { kind: 'style', text: '第五条也应当被折叠', confidence: 0.4, evidence: '2026-11-10/s5' },
+          ], { date: '2026-11-10' }).text
+        })(), 'profile', { limit: 3, sort: true }),
         stats: { counts: {}, pinned: 0 },
       },
       persona: {
@@ -504,6 +536,20 @@ ok('client bundle registers a settings section and renders the loaded panel', as
         sections: describeDocument(emptyProfile(PERSONA_SECTIONS, '助手性格'), 'persona'),
         stats: { counts: {}, pinned: 0 },
         injected: { enabled: true, count: 0, chars: 0 },
+      },
+    },
+    identity: {
+      profileVersion: 4,
+      profileUpdatedAt: '2026-11-10T06:54:21.111Z',
+      generatedAt: '2026-11-10T07:00:00.000Z',
+      used: 3,
+      excluded: 2,
+      fields: {
+        role: { text: '大概率在做平台工程', basis: ['style-1', 'style-2'] },
+        domain: { text: '插件与工具链', basis: ['style-1'] },
+        stack: { text: '', basis: [] },
+        workflow: { text: '先跑通再谈优化', basis: [] },
+        impression: { text: '对不确定的地方会先问清楚', basis: [] },
       },
     },
     personaIsDue: false,
@@ -613,6 +659,51 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   assert.ok(rendered.some((text) => text.includes('喜欢先给结论')), 'renders a profile entry')
   assert.ok(rendered.some((text) => text.includes('# 今天')), 'renders the latest daily note')
 
+  // Profile sections fold to three rows; the user-locked list never folds, so its
+  // four rows are all on screen without an expander of its own.
+  const rerender = () => {
+    rendered.length = 0
+    elements.length = 0
+    render({ type: component, props: { t: translate } })
+  }
+  const foldButtons = () => elements.filter((element) => element.type === 'button' && typeof element.props.children === 'string' && element.props.children.startsWith('展开全部'))
+  assert.strictEqual(foldButtons().length, 1, 'only the folded profile section gets an expander')
+  assert.ok(!rendered.some((text) => text.includes('第四条应当被折叠')), 'row four is folded away')
+  assert.ok(!rendered.some((text) => text.includes('第五条也应当被折叠')), 'row five is folded away')
+  assert.ok(rendered.some((text) => text.includes('不要用「您」')), 'the user-locked list is never folded')
+  assert.ok(rendered.some((text) => text.includes('引用要给出处')), 'all four locked rows render')
+  foldButtons()[0].props.onClick()
+  rerender()
+  assert.ok(rendered.some((text) => text.includes('第四条应当被折叠')), 'expanding shows the rest')
+  assert.ok(rendered.some((text) => text.includes('第五条也应当被折叠')))
+  const collapseButton = elements.find((element) => element.type === 'button' && element.props.children === '收起')
+  assert.ok(collapseButton !== undefined, 'the expander turns into a collapse button')
+  collapseButton.props.onClick()
+  rerender()
+  assert.ok(!rendered.some((text) => text.includes('第四条应当被折叠')), 'collapsing folds it back')
+
+  // The identity block: five fields, its basis can be opened, and the count of
+  // entries left below the threshold is shown.
+  assert.ok(rendered.some((text) => text.includes('身份块')))
+  assert.ok(rendered.some((text) => text.includes('大概率在做平台工程')))
+  assert.ok(rendered.some((text) => text.includes('（尚无判断）')), 'empty fields say so instead of rendering blank')
+  assert.ok(rendered.some((text) => text.includes('另有 2 条低于阈值未计入')))
+  const basisButton = elements.find((element) => element.type === 'button' && element.props.children === '依据（2）')
+  assert.ok(basisButton !== undefined, 'a field with basis offers the toggle')
+  assert.ok(!rendered.some((text) => text.includes('[style-1] 喜欢先给结论')), 'basis rows stay hidden until asked for')
+  basisButton.props.onClick()
+  rerender()
+  assert.ok(rendered.some((text) => text.includes('[style-1] 喜欢先给结论')), 'opening the basis shows the source rows')
+  assert.ok(elements.some((element) => element.type === 'button' && element.props.children === '重新生成'), 'identity can be regenerated')
+
+  // With no cache the card says so instead of showing five empty fields.
+  currentPayload = { ...payload, identity: null }
+  timers[0]()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  rerender()
+  assert.ok(rendered.some((text) => text.includes('尚未生成')), 'says so when no identity block exists yet')
+  currentPayload = payload
+
   // Provider and model become selects once the host catalogue lands, and the
   // saved model must be one of the options — a select that dropped it would
   // rewrite the config on the next save.
@@ -710,6 +801,7 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
     stateFile: path.join(dir, 'state.json'),
     lockFile: path.join(dir, '.lock'),
     logDir: path.join(dir, 'logs'),
+    identityFile: path.join(dir, 'identity.json'),
   }
   fs.mkdirSync(paths.dailyDir, { recursive: true })
   const base = applySuggestions(emptyProfile(PROFILE_SECTIONS, '用户画像'), PROFILE_SECTIONS, [
@@ -723,6 +815,7 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
   const runs = []
   const applied = []
   const logged = []
+  let identityRefreshes = 0
   registerRoutes({ register: ({ path: routePath, handler }) => routes.set(routePath, handler) }, {
     paths,
     state: { lastPersonaRunDay: '', runs: [] },
@@ -741,6 +834,10 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
       providers: [{ id: 'deepseek-account', name: 'DeepSeek' }],
       models: { 'deepseek-account': [{ id: 'deepseek-v4-pro', name: 'deepseek-v4-pro' }] },
     }),
+    refreshIdentity: async () => {
+      identityRefreshes += 1
+      return { generated: false, cached: true, error: null }
+    },
   })
   const call = (name, options = {}) => new Promise((resolve, reject) => {
     const handler = routes.get(`/persona-memory/${name}`)
@@ -829,6 +926,16 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
   assert.ok(!rolled.documents.profile.text.includes('新加的一条'))
   assert.ok(listHistory(paths, 'profile').length >= 2)
   assert.ok(logged.some((line) => line.startsWith('rollback profile')))
+
+  // The identity block has exactly one action: regenerate. No route accepts text.
+  assert.strictEqual((await call('identity/refresh', { method: 'GET' })).status, 405)
+  const refreshed = await call('identity/refresh', { method: 'POST' })
+  assert.strictEqual(refreshed.status, 200)
+  assert.strictEqual(identityRefreshes, 1)
+  const refreshedBody = JSON.parse(refreshed.body)
+  assert.strictEqual(refreshedBody.identityError, null)
+  assert.strictEqual(refreshedBody.identity, null, 'no cache yet means the panel shows 尚未生成')
+  assert.strictEqual((await call('identity/refresh', { method: 'POST', remote: '10.1.2.3' })).status, 403)
 })
 
 ok('state: a BOM-prefixed or corrupt state file cannot silently reset the scheduler', async () => {
@@ -1216,6 +1323,136 @@ ok('extractJson survives raw newlines, trailing commas, and a broken leading obj
   // A malformed object must not hide a valid one that follows it.
   const twoSpans = '先看重试：{oops} 再说：{"add":[{"text":"我记住了"}]}'
   assert.deepStrictEqual(extractJson(twoSpans).add, [{ text: '我记住了' }])
+})
+
+ok('profile sections preview three rows, pinned first, and only the profile folds', () => {
+  let text = emptyProfile(PROFILE_SECTIONS, '用户画像')
+  text = applySuggestions(text, PROFILE_SECTIONS, [
+    { kind: 'style', text: '最早但最自信', confidence: 0.95, evidence: '2026-11-09/a' },
+  ], { date: '2026-11-09' }).text
+  text = applySuggestions(text, PROFILE_SECTIONS, [
+    { kind: 'style', text: '新的二', confidence: 0.70, evidence: '2026-11-10/b' },
+    { kind: 'style', text: '新的三', confidence: 0.65, evidence: '2026-11-10/c' },
+    { kind: 'style', text: '新的一', confidence: 0.60, evidence: '2026-11-10/d' },
+    { kind: 'style', text: '新的四', confidence: 0.55, evidence: '2026-11-10/e' },
+  ], { date: '2026-11-10' }).text
+  text = appendLockedEntry(text, PROFILE_SECTIONS, '不要用「您」', { date: '2026-11-10' }).text
+  text = setPinned(text, PROFILE_SECTIONS, 'style-1', true, { title: '用户画像' }).text
+
+  const sections = describeDocument(text, 'profile', { limit: 3, sort: true })
+  const style = sections.find((section) => section.key === 'style')
+  assert.strictEqual(style.total, 5)
+  assert.strictEqual(style.limit, 3)
+  // Pinned first, then newest verification, then confidence. Without the pinned
+  // rule the oldest row would sit behind the fold and could never be unpinned.
+  assert.deepStrictEqual(style.entries.map((entry) => entry.text), ['最早但最自信', '新的二', '新的三', '新的一', '新的四'])
+  assert.strictEqual(style.entries[0].pinned, true)
+  const locked = sections.find((section) => section.key === 'locked')
+  assert.strictEqual(locked.limit, 0, 'the user-locked list never folds')
+  assert.strictEqual(locked.entries.length, 1)
+  // The persona document is untouched by this feature.
+  assert.ok(describeDocument(emptyProfile(PERSONA_SECTIONS, '助手性格'), 'persona').every((section) => section.limit === 0))
+})
+
+ok('identity: only confident (or pinned) entries are used, and the rest are counted', () => {
+  let text = emptyProfile(PROFILE_SECTIONS, '用户画像')
+  text = applySuggestions(text, PROFILE_SECTIONS, [
+    { kind: 'preference', text: '甲的偏好', confidence: 0.90, evidence: '2026-11-10/a' },
+    { kind: 'style', text: '乙的习惯', confidence: 0.65, evidence: '2026-11-10/b' },
+    { kind: 'thinking', text: '丙的模式', confidence: 0.72, evidence: '2026-11-10/c' },
+  ], { date: '2026-11-10' }).text
+  text = appendLockedEntry(text, PROFILE_SECTIONS, '不要用「您」', { date: '2026-11-10' }).text
+  const inputs = identityInputs(text)
+  assert.strictEqual(inputs.used, 3)
+  assert.strictEqual(inputs.excluded, 1)
+  assert.ok(inputs.entries.some((entry) => entry.id === 'lock-1'), 'manual rules always count')
+  assert.ok(!inputs.entries.some((entry) => entry.id === 'style-1'))
+  // A pinned entry below the threshold is exempt.
+  const pinned = setPinned(text, PROFILE_SECTIONS, 'style-1', true, { title: '用户画像' }).text
+  const again = identityInputs(pinned)
+  assert.strictEqual(again.used, 4)
+  assert.strictEqual(again.excluded, 0)
+})
+
+ok('identity: a basis id that was not offered is dropped', () => {
+  const fields = parseIdentity({ fields: { role: { text: '做平台工程', basis: ['pref-1', 'nope', 'pref-1'] } } }, ['pref-1'])
+  assert.deepStrictEqual(fields.role.basis, ['pref-1'])
+  assert.strictEqual(fields.role.text, '做平台工程')
+  // No usable text at all is a failure, not an empty block: writing it would
+  // erase whatever was generated last time.
+  assert.strictEqual(parseIdentity({ fields: { role: { text: '   ', basis: [] } } }, ['pref-1']), undefined)
+  assert.strictEqual(parseIdentity(undefined, []), undefined)
+})
+
+ok('identity: an unchanged profile version makes no model call', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-id-'))
+  const paths = { root: dir, profileFile: path.join(dir, 'profile.md'), identityFile: path.join(dir, 'identity.json') }
+  const config = composeConfig({}, {})
+  const writeProfile = (version) => {
+    const text = ['---', `version: ${version}`, `updatedAt: 2026-11-0${version}T00:00:00.000Z`, 'title: 用户画像', '---', '', '## 稳定偏好', '- [pref-1] [置信度 0.90] 甲的偏好（证据：用户口述）', ''].join('\n')
+    fs.writeFileSync(paths.profileFile, text, 'utf8')
+  }
+  writeProfile(1)
+  let calls = 0
+  const ctx = {
+    llm: {
+      stream: async function* () {
+        calls += 1
+        yield { type: 'text', text: JSON.stringify({ fields: { role: { text: '做平台工程', basis: ['pref-1'] } } }) }
+      },
+    },
+  }
+  const first = await ensureIdentity(ctx, config, paths, () => {})
+  assert.strictEqual(first.generated, true)
+  assert.strictEqual(calls, 1)
+  const second = await ensureIdentity(ctx, config, paths, () => {})
+  assert.strictEqual(second.generated, false)
+  assert.strictEqual(second.cached, true)
+  assert.strictEqual(calls, 1, 'the model must not be called again while the version holds')
+  assert.strictEqual(readIdentity(paths.identityFile).profileVersion, 1)
+  writeProfile(2)
+  const third = await ensureIdentity(ctx, config, paths, () => {})
+  assert.strictEqual(third.generated, true)
+  assert.strictEqual(calls, 2)
+
+  // A failed regeneration keeps the previous block instead of erasing it.
+  const before = fs.readFileSync(paths.identityFile, 'utf8')
+  const broken = { llm: { stream: async function* () { throw new Error('boom') } } }
+  const failed = await ensureIdentity(broken, config, paths, () => {}, { force: true })
+  assert.strictEqual(failed.generated, false)
+  assert.strictEqual(typeof failed.error, 'string')
+  assert.strictEqual(fs.readFileSync(paths.identityFile, 'utf8'), before)
+})
+
+ok('identity: the block never reaches profile.md or the prompt', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-id2-'))
+  const paths = {
+    root: dir,
+    profileFile: path.join(dir, 'profile.md'),
+    personaFile: path.join(dir, 'persona.md'),
+    identityFile: path.join(dir, 'identity.json'),
+  }
+  const profile = applySuggestions(emptyProfile(PROFILE_SECTIONS, '用户画像'), PROFILE_SECTIONS, [
+    { kind: 'preference', text: '甲的偏好', confidence: 0.90, evidence: '2026-11-10/a' },
+  ], { date: '2026-11-10' })
+  fs.writeFileSync(paths.profileFile, profile.text, 'utf8')
+  fs.writeFileSync(paths.personaFile, '# 我的自述\n', 'utf8')
+  const before = fs.readFileSync(paths.profileFile)
+  const ctx = {
+    llm: {
+      stream: async function* () {
+        yield { type: 'text', text: JSON.stringify({ fields: { role: { text: '平台工程 MARKER-IDENTITY', basis: ['pref-1'] } } }) }
+      },
+    },
+  }
+  const result = await ensureIdentity(ctx, composeConfig({}, {}), paths, () => {})
+  assert.strictEqual(result.generated, true)
+  // Byte-for-byte: a prediction must never become evidence for the next merge.
+  assert.deepStrictEqual(fs.readFileSync(paths.profileFile), before)
+  assert.ok(fs.readFileSync(paths.identityFile, 'utf8').includes('MARKER-IDENTITY'))
+  const section = buildSectionText(paths, composeConfig({}, { promptBudgetChars: 1200 }))
+  assert.ok(section.includes('甲的偏好'), 'the profile is still injected')
+  assert.ok(!section.includes('MARKER-IDENTITY'), 'the identity block is never injected')
 })
 
 await Promise.all(pending)

@@ -56,9 +56,21 @@ The plugin ships a browser half (`dsh.client`) that registers a **记忆与画�
 
 The **my self-account** card reports **how many lines are injected right now** (and whether the block is empty). The file and the prompt are two different things: candidates never inject, so when it says "nothing is injected yet" the card also says how much evidence is still missing — no need to read code or logs.
 
+Profile sections show **three rows** by default (pinned first) with a **Show all (N)** expander underneath; the user-locked list never folds. Ordering is pinned → most recently verified → most confident, so a folded row can always be reached and pinned, and nothing you pinned can hide behind the fold.
+
 Every knob in the config block below is editable there — including the 我认为我是谁 date threshold and the demote window — so the patch row is never the only way in. Each field carries a one-line explanation of what it changes and the page validates what it can (time format, numeric ranges) before the request leaves: an invalid value shows a message under the control and disables **保存**. **Provider and model are dropdowns** fed by the host's own model catalogue (`ctx.llm.listProviders()` / `listModels()`, served over `GET /persona-memory/models`); the controls use `color-scheme: inherit`, so the closed box and the native popup follow whatever light/dark scheme the host resolved. When an adapter cannot enumerate its models the fields fall back to free-text inputs, and the value that is already saved is always kept as an option, so opening the page can never silently change it.
 
 Settings made there are stored in `persona-memory/config.json` as overrides and win over the patch-row config; delete that file to fall back to the row. The page talks to the plugin's own loopback routes, so no host settings plumbing is involved.
+
+### The identity block (a derived view of the profile)
+
+The identity block is not a second memory: it reads `profile.md` and asks the model for five fields — **role / domain / stack / workflow / impression** — one judgement each, with the evidence kept in `basis` (entry ids) and the reasoning kept out of the line. Extrapolation is required, not discouraged: from "cares about permission boundaries" + "wants sources" + "explains before acting" it should land on "probably doing ops or platform work where mistakes get blamed on someone", not on "these three keep appearing, so I guess…". Health, religion, politics, sexual orientation, finances and marriage are off limits.
+
+Three hard rules:
+
+- **Only entries at confidence ≥ 0.7 are fed in**; pinned and manually locked entries always count, and the panel shows how many were left out ("N more below the threshold were left out").
+- **An unchanged version costs no model call**: `identity.json` records the `profileVersion` it was built from, so a day that did not touch the profile does not call anything.
+- **It never writes back into the profile and is never injected**: a prediction must not become evidence for the next merge, and `lib/inject.js` does not know it exists. The panel offers exactly one action — regenerate; there is no way to edit the text, and a failed generation keeps the previous block instead of erasing it.
 
 ### Run notifications
 
@@ -83,6 +95,7 @@ The run record itself carries the outcome (`profile`, `persona`, `skipped`, `err
 $DSH_HOME/persona-memory/
 ├── profile.md            # user profile (single source of truth)
 ├── persona.md            # my self-account (first person; old headings are read and rewritten)
+├── identity.json         # identity block cache (derived view; never written back)
 ├── config.json           # settings-page overrides (optional)
 ├── daily/YYYY-MM-DD.md   # summary / observations / my judgments / follow-ups
 ├── history/              # backup before every rewrite: profile-<date>-<ms>.md
@@ -123,6 +136,7 @@ $DSH_HOME/persona-memory/
 | `POST /persona-memory/pin` | `{ doc, id, pinned }` |
 | `GET /persona-memory/history` | `?doc=profile` or `?doc=persona` — pre-write backups |
 | `POST /persona-memory/rollback` | `{ doc, name }` — restore one backup |
+| `POST /persona-memory/identity/refresh` | Regenerate the identity block from the current profile (**the only write action**, and there is no route that accepts its text) |
 
 Every non-loopback request is rejected with 403; wrong methods get 405.
 
