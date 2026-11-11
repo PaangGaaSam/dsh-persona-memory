@@ -43,7 +43,8 @@ import {
   renderPersonaInjection,
   setPinned,
 } from '../lib/profile.js'
-import { extractJson, parseCard, parseDaily, parseDailyObservations, parseLessonSuggestions, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites, detectConsequenceSignals } from '../lib/digest.js'
+import { extractJson, extractJsonReport, lessonsStage, parseCard, parseDaily, parseDailyObservations, parseLessonSuggestions, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites, detectConsequenceSignals } from '../lib/digest.js'
+import { formatReport } from '../lib/report.js'
 import { PERSONA_HEADING, buildSectionText, planBudget, renderLayers } from '../lib/inject.js'
 import { resolveDshHome } from '../lib/util.js'
 
@@ -980,6 +981,7 @@ ok('client bundle registers a settings section and renders the loaded panel', as
       skipped: false,
       profile: { applied: 2, merged: 1 },
       persona: { applied: 1, merged: 0, promoted: 1, demoted: 0, superseded: 0 },
+      lessons: { added: 1, pending: 0, merged: 0, archived: 0, suggestions: 1, truncated: true },
     }]
     return next
   }
@@ -995,6 +997,8 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   render({ type: component, props: { t: translate } })
   assert.ok(rendered.some((text) => text.includes('运行完成')), 'announces the finished run')
   assert.ok(rendered.some((text) => text.includes('画像 +2 ~1')), 'summarizes what the run changed')
+  assert.ok(rendered.some((text) => text.includes('教训 +1')), 'the lessons delta is part of the banner')
+  assert.ok(rendered.some((text) => text.includes('教训 被截断（收下 1 条）')), 'a cut-off lessons answer is flagged in the banner too')
 
   for (const dispose of disposers) dispose()
   globalThis.setInterval = realSetInterval
@@ -2003,6 +2007,96 @@ ok('lessons: consequence signals come from failures, corrections, and rework', (
   assert.ok(signals.every((signal) => signal.text.length <= 160))
   assert.ok(signals.some((signal) => signal.evidence === '2026-11-11/session-aaaa1111'))
   assert.deepStrictEqual(detectConsequenceSignals([], [], '2026-11-11'), [])
+})
+
+// ── lessons: a cut-off model answer ──────────────────────────────────────────
+
+/** One model call whose whole answer is `text`; info and warn lines are captured. */
+async function lessonsFrom(text) {
+  const infos = []
+  const warns = []
+  const ctx = {
+    llm: {
+      stream: async function* () {
+        yield { type: 'text', text }
+      },
+    },
+  }
+  const result = await lessonsStage(
+    ctx,
+    composeConfig({}, {}),
+    { date: '2026-11-11', cwdList: [], candidates: [{ section: 'exp', text: '候选雷点', scope: '', evidence: '' }], signals: [], notes: [], lessonsText: '' },
+    (message) => infos.push(message),
+    (message) => warns.push(message),
+  )
+  return { ...result, infos, warns }
+}
+
+ok('lessons: one bare entry object still becomes a suggestion', () => {
+  // `extractJson`'s lenient pass hands back the first balanced span. When the `{"add":[`
+  // wrapper was cut off, that span is an entry object, not the wrapper — and the
+  // entry is valid JSON on its own.
+  const entry = { section: 'exp', text: '先复现再改代码', scope: '全局', anchor: '2026-11-11/session-aaaa1111 · 先复现', invalidates: '', invalidReason: '' }
+  assert.strictEqual(extractJsonReport(JSON.stringify(entry)).complete, true)
+  const suggestions = parseLessonSuggestions(entry, '2026-11-11')
+  assert.strictEqual(suggestions.length, 1)
+  assert.strictEqual(suggestions[0].text, '先复现再改代码')
+  assert.strictEqual(suggestions[0].section, 'exp')
+  assert.strictEqual(parseLessonSuggestions({ text: '只带 text 的条目' }).length, 1)
+  // The fallback is for entry objects only: a wrapper without a list is still nothing.
+  assert.deepStrictEqual(parseLessonSuggestions({ topic: '不是条目' }), [])
+})
+
+ok('lessons: the 2026-11-11 cut-off answer is kept and reported as truncated', async () => {
+  // The real response that shipped zero lessons while the run reported success.
+  const raw = fs.readFileSync(new URL('./fixtures/lessons-truncated-2026-11-11.txt', import.meta.url), 'utf8')
+  assert.strictEqual(raw.length, 1437, 'the fixture is the real response, not a resized copy')
+  const extracted = extractJsonReport(raw)
+  assert.strictEqual(extracted.complete, false, 'the outer array never closed')
+  assert.strictEqual(extracted.value.section, 'exp', 'the lenient pass still found one entry')
+  const result = await lessonsFrom(raw)
+  assert.strictEqual(result.truncated, true)
+  assert.strictEqual(result.suggestions.length, 1, 'the complete entry is not thrown away with the fragment')
+  assert.ok(result.suggestions[0].text.length > 0)
+  // The warn line has to identify the failure on its own: length and elapsed time.
+  const warn = result.warns.find((message) => message.includes('truncated'))
+  assert.ok(warn !== undefined, 'a cut-off answer warns instead of looking like a quiet day')
+  assert.ok(warn.includes('1437 chars'))
+  assert.ok(/in \d+ms/.test(warn))
+  assert.ok(result.durationMs >= 0)
+  // The run summary says it out loud instead of leaving an innocent-looking "+0".
+  const summary = formatReport({
+    date: '2026-11-11',
+    sessions: 7,
+    cards: 7,
+    daily: 'C:\\d\\2026-11-11.md',
+    profile: null,
+    persona: null,
+    identity: null,
+    skipped: false,
+    lessons: { added: 1, pending: 0, merged: 0, archived: 0, truncated: true, suggestions: 1 },
+  })
+  assert.ok(summary.includes('教训：本次输出被截断，只收下 1 条'))
+})
+
+ok('lessons: a complete list is not flagged', async () => {
+  const body = JSON.stringify({ add: [{ section: 'rule', text: '删文件前先确认绝对路径', scope: '全局' }] })
+  const extracted = extractJsonReport(body)
+  assert.strictEqual(extracted.complete, true)
+  assert.deepStrictEqual(extracted.value, { add: [{ section: 'rule', text: '删文件前先确认绝对路径', scope: '全局' }] })
+  assert.strictEqual(extractJson(body).add.length, 1, 'extractJson still returns the value only')
+  const result = await lessonsFrom(body)
+  assert.strictEqual(result.truncated, false)
+  assert.strictEqual(result.suggestions.length, 1)
+  assert.strictEqual(result.suggestions[0].section, 'rule')
+  assert.deepStrictEqual(result.warns, [])
+})
+
+ok('lessons: an empty list is a legitimate answer, not a warning', async () => {
+  const result = await lessonsFrom('{"add":[]}')
+  assert.strictEqual(result.suggestions.length, 0)
+  assert.strictEqual(result.truncated, false)
+  assert.deepStrictEqual(result.warns, [], 'a quiet day must not raise a truncated warning')
 })
 
 ok('lessons: injection order, budget sharing, and the 40% ceiling', () => {
