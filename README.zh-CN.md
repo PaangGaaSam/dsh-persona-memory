@@ -75,6 +75,17 @@ dsh plugin add github:PaangGaaSam/dsh-persona-memory
 
 作用域 v1 只有两档：**当前工作区（cwd）** 和 **全局**。别的 worktree 的教训不会进这个工作区的提示词。教训还带锚点（日期 / 会话 / 日报里那句话），指向的日报条目被删时，教训保留，面板把锚点显示成「（原条目已删除）」。
 
+## 事实层（按需检索，不进提示词）
+
+教训回答「该怎么做」，事实回答「是什么」：装在哪、版本多少、路径怎么走、当时定过什么。两层刻意相反 —— 教训常驻注入，所以要少而硬；事实**从不进提示词**，只在模型调用 `facts_search` 时按关键词检索。所以事实库可以一直长，而每轮提示词的字符数不变。
+
+- 文件 `$DSH_HOME/persona-memory/facts.md`：**只追加、只作废、不改写**。每次写盘前后逐条比对 id / 原句 / 作用域 / 验证命令，任何一条变了就拒绝写入；作废必须给原因，原句和 `[验证]` 一起进「已作废」。
+- 一条事实长这样：`- [fact-1] [作用域 本机] [确认 2026-11-12] DSH 装在 D:\deepseekharness（锚点：…）`，下面可以跟两行续行：`  [验证] Test-Path …`（一行命令，现场自证）和 `  [回注] …`（可选，v1 只存不用）。续行是缩进的独立行，所以命令里带方括号也不会把解析弄坏。
+- 作用域三档：**全局 / 本机 / 工作区路径**。检索只带全局 + 本机 + 当前工作区；别的工作区的事实只报「另有 N 条只属于别的工作区」，不注入、不混进来。
+- 过期：超过 **180 天**没再确认的条目标 `[可能过期]`，但**不删除、不隐藏**；面板上点一次「确认」就刷新日期。
+- v1 **只有人能写**：设置页「事实」卡片，或者 `POST /persona-memory/facts/add`。没有一个叫 `facts_add` / `facts_archive` 的模型工具 —— 模型能调用的只有 `facts_search`，所以「事实不改写事实」在代码里是真的。
+- 没命中时工具直接返回「没有找到…不要据此推测」，不让模型拿空结果编。
+
 ## 设置页
 
 插件带一个浏览器半身（`dsh.client`），在宿主设置里注册「**记忆与画像**」分区。它显示运行状态，可改调度、模型、预算与范围，可手动跑摘要（可强制合并自述），可逐条置顶 / 取消置顶，可回滚到写入前的备份，也能读最新一篇日报。
@@ -124,6 +135,7 @@ dsh plugin add github:PaangGaaSam/dsh-persona-memory
 | `persona_pin` / `persona_unpin` | 按 id 置顶 / 取消置顶（`[pref-1]` …） |
 | `persona_rollback` | 列出或恢复写入前备份 |
 | `persona_note` | 把一条用户口述的规则追加到锁定区 |
+| `facts_search` | 按关键词检索事实（全局 + 本机 + 当前工作区），返回锚点与验证命令；**不注入提示词，只有它读事实** |
 
 ## 数据布局
 
@@ -132,6 +144,7 @@ $DSH_HOME/persona-memory/
 ├── profile.md            # 用户画像（唯一事实来源）
 ├── persona.md            # 我的自述（第一人称；旧标题会被识别并改写）
 ├── lessons.md            # 教训（铁律 / 时效经验 / 已作废；只追加、只作废）
+├── facts.md              # 事实（全局 / 本机 / 工作区；按需检索，不进提示词；只追加、只作废）
 ├── identity.json         # 身份块缓存（画像的派生视图，只读不写回）
 ├── config.json           # 设置页覆盖项（可选）
 ├── daily/YYYY-MM-DD.md   # 每日摘要：今日摘要 / 观察 / 我的判断 / 可疑雷点 / 延续待办
@@ -168,16 +181,19 @@ $DSH_HOME/persona-memory/
 | `GET /persona-memory/config` | 可改配置项与默认值 |
 | `POST /persona-memory/config` | `{ patch }` —— 校验、持久化、生效 |
 | `POST /persona-memory/run` | `{ forcePersona }` —— 立刻跑摘要 |
-| `GET /persona-memory/documents` | 三份文档按分区返回条目，附最新日报 |
+| `GET /persona-memory/documents` | 四份文档按分区返回条目，附最新日报 |
 | `GET /persona-memory/models` | 下拉框用的提供方与模型目录 |
 | `POST /persona-memory/pin` | `{ doc, id, pinned }` |
-| `GET /persona-memory/history` | `?doc=profile` / `persona` / `lessons` —— 写入前备份 |
+| `GET /persona-memory/history` | `?doc=profile` / `persona` / `lessons` / `facts` —— 写入前备份 |
 | `POST /persona-memory/rollback` | `{ doc, name }` —— 恢复某份备份 |
 | `POST /persona-memory/identity/refresh` | 按当前画像重算身份块（**唯一的身份块写入口**，没有写 text 的接口） |
 | `POST /persona-memory/lessons/add` | `{ text, section, scope }` —— 人工新增一条教训 |
 | `POST /persona-memory/lessons/approve` | `{ id }` —— 批准一条待确认铁律（满了 10 条会拒绝） |
 | `POST /persona-memory/lessons/reject` | `{ id, reason }` —— 作废，**原因必填**，原文进「已作废」 |
 | `POST /persona-memory/lessons/replace` | `{ id, text }` —— 只对铁律；旧写法进「已作废」，新写法追加 |
+| `POST /persona-memory/facts/add` | `{ text, scope, verify?, prompt?, note? }` —— 人工新增一条事实（**模型没有对应工具**） |
+| `POST /persona-memory/facts/archive` | `{ id, reason }` —— 作废，**原因必填**，原句与 `[验证]` 一起进「已作废」 |
+| `POST /persona-memory/facts/confirm` | `{ id }` —— 刷新确认日（180 天没确认才会被标「可能过期」） |
 
 非回环请求一律 403；方法不对返回 405。
 
@@ -188,6 +204,7 @@ $DSH_HOME/persona-memory/
 - 模型输出必须是 JSON；解析容忍散文和代码围栏，但某一段生成失败只降级那一段（其余段照常写入）。
 - **作用域 v1 只认宿主给的 cwd**：宿主目前没有确认「每轮重建提示词」，所以 `buildSectionText` 先取上下文里的 `cwd`，取不到就用宿主进程的 cwd。结果是**全局教训总会注入**，工作区教训只有在宿主进程就跑在那个工作区时才注入。关键词 / 文件类型匹配留空不实现 —— 宁漏勿滥。
 - 教训的冲突检测是机械扫描（同作用域 + 极性相反 + 文本相似度 ≥ 0.4），不是语义理解：它会把明显相反的标出来，也可能漏掉绕了一圈的表达。标错不会删任何东西。
+- 事实检索是关键词匹配（子串 + 分词命中），不是语义检索：换个说法就可能搜不到。宁漏勿错 —— 没命中时它直接说没记录。检索结果会作为工具结果进入这次对话，因此下一次日更会读到它（stage-1 已有「不把系统技术结论写进 self」的约束，`isSystemFactObservation` 再把系统类事实挡在画像之外）。
 - 以 `link:` 安装的包，改源码后需要重启宿主（加载器不热重载软链接源码，客户端 bundle 是从构建好的 `lib/client.js` 直接发出的）。
 
 ## 如果它对你有点用

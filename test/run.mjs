@@ -45,6 +45,7 @@ import {
   setPinned,
 } from '../lib/profile.js'
 import { extractJson, extractJsonReport, lessonsStage, parseCard, parseDaily, parseDailyObservations, parseLessonSuggestions, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites, detectConsequenceSignals } from '../lib/digest.js'
+import { addManualFact, archiveFact, assertFactsAppendOnly, confirmFact, describeFacts, emptyFacts, FACT_STALE_DAYS, parseFacts, searchFacts } from '../lib/facts.js'
 import { formatReport } from '../lib/report.js'
 import { PERSONA_HEADING, buildSectionText, planBudget, renderLayers } from '../lib/inject.js'
 import { decideSlot, nextSlotAfter } from '../lib/schedule.js'
@@ -145,14 +146,21 @@ if (fs.existsSync(sessionsRoot)) {
     }
   })
   if (sessions.length > 0) {
-    const sample = sessions[sessions.length - 1]
-    assert.ok(sample.messages.some((m) => m.role === 'assistant'))
-    console.log(`  sample: ${sample.id} @ ${sample.cwd} — ${sample.messages.length} messages`)
-    const raw = fs.readFileSync(sample.file)
-    const decoded = decodeSessionLog(raw)
-    assert.ok(decoded.includes('"type":"session"'))
-    const parsed = parseSessionLog(decoded, sample.id)
-    assert.ok(parsed.messages.length >= sample.messages.length)
+    // The newest session is usually the one currently running, whose assistant
+    // turns are not on disk yet — pick the newest one that already has a reply,
+    // otherwise this live check fails for a reason that has nothing to do with
+    // the collector.
+    const sample = [...sessions].reverse().find((session) => session.messages.some((m) => m.role === 'assistant'))
+    if (sample === undefined) {
+      console.log('  (no session with an assistant turn yet; live decode check skipped)')
+    } else {
+      console.log(`  sample: ${sample.id} @ ${sample.cwd} — ${sample.messages.length} messages`)
+      const raw = fs.readFileSync(sample.file)
+      const decoded = decodeSessionLog(raw)
+      assert.ok(decoded.includes('"type":"session"'))
+      const parsed = parseSessionLog(decoded, sample.id)
+      assert.ok(parsed.messages.length >= sample.messages.length)
+    }
   }
 } else {
   console.log('(no sessions root; collector live test skipped)')
@@ -774,6 +782,23 @@ ok('client bundle registers a settings section and renders the loaded panel', as
       injected: { enabled: true, count: 2, chars: 60, skipped: 1, conflicts: 2 },
       emptyDays: 2,
     },
+    // The facts card: two live rows (the older one stale, the newest with a verify
+    // command) and one retired row, built through the real writer so the payload
+    // shape cannot drift from what the routes return.
+    facts: (() => {
+      let text = emptyFacts()
+      text = addManualFact(text, {
+        text: 'DSH 装在 D:\\deepseekharness。',
+        scope: '本机',
+        verify: 'Test-Path "D:\\deepseekharness"',
+        anchor: { note: '插件是进程内加载' },
+      }, { date: '2026-11-12' }).text
+      text = addManualFact(text, { text: '端口是 65100。', scope: 'D:\\work\\alpha' }, { date: '2026-01-01' }).text
+      text = addManualFact(text, { text: '旧机器的事实。', scope: '本机' }, { date: '2026-11-01' }).text
+      text = archiveFact(text, 'fact-3', '机器换了一台', { date: '2026-11-02' }).text
+      const described = describeFacts(text, { today: '2026-11-12' })
+      return { text, sections: described.sections, stats: described.stats }
+    })(),
   }
   const fetchCalls = []
   let currentPayload = payload
@@ -1115,6 +1140,63 @@ ok('client bundle registers a settings section and renders the loaded panel', as
   assert.strictEqual(lessonCalls('add').length, 1)
   assert.deepStrictEqual(JSON.parse(lessonCalls('add')[0].body), { section: 'rule', text: '先看日志再猜原因', scope: '' })
 
+  // ── facts: human-written, never injected ──────────────────────────────────
+  // The card must say out loud that it is not part of the prompt, otherwise a
+  // growing list looks like it costs tokens every turn.
+  assert.ok(rendered.some((text) => text.includes('不常驻提示')), 'the card says it is not part of the prompt')
+  assert.ok(rendered.some((text) => text.includes('生效 2 条 · 已作废 1 条')), 'counts come from the real document')
+  assert.ok(rendered.some((text) => text.includes('DSH 装在 D:\\deepseekharness。')), 'a fact is listed verbatim')
+  assert.ok(rendered.some((text) => text.includes('验证: Test-Path "D:\\deepseekharness"')), 'the verify command is shown')
+  assert.ok(rendered.some((text) => text.includes('可能过期')), 'a 180-day-old fact is marked, never hidden')
+  assert.ok(rendered.some((text) => text.includes('机器换了一台')), 'the retirement reason is visible')
+  assert.ok(rendered.some((text) => text.includes('确认 2026-01-01')), 'the confirmation date is shown per row')
+
+  const factCalls = (name) => fetchCalls.filter((call) => call.url === `/persona-memory/facts/${name}`)
+  const factButton = (label) => elements.filter((element) => element.type === 'button' && element.props.children === label)
+
+  // Confirm: the only way a fact stays fresh, and the model cannot do it.
+  assert.strictEqual(factButton('确认').length, 2, 'each live fact offers confirm')
+  factButton('确认')[0].props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(factCalls('confirm').length, 1)
+  assert.deepStrictEqual(JSON.parse(factCalls('confirm')[0].body), { id: 'fact-1' })
+
+  // Retire: reason required, and the sentence itself is never edited.
+  assert.strictEqual(factButton('作废').length, 2, 'the retired row offers no action')
+  factButton('作废')[0].props.onClick()
+  rerender()
+  const factReasonInputs = elements.filter((element) => element.type === 'input' && element.props.placeholder === '作废原因（必填）')
+  assert.strictEqual(factReasonInputs.length, 1, 'retiring a fact asks for a reason')
+  assert.strictEqual(factButton('确认作废')[0].props.disabled, true, 'a fact cannot be retired without a reason')
+  factReasonInputs[0].props.onChange({ target: { value: '已经搬家了' } })
+  rerender()
+  factButton('确认作废')[0].props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(factCalls('archive').length, 1)
+  assert.deepStrictEqual(JSON.parse(factCalls('archive')[0].body), { id: 'fact-1', reason: '已经搬家了' })
+
+  // Manual add: sentence, scope, verify command and the optional prompt cue.
+  const factTextField = elements.find((element) => element.type === 'input' && typeof element.props.placeholder === 'string' && element.props.placeholder.startsWith('一条事实'))
+  assert.ok(factTextField !== undefined, 'the card offers a manual add')
+  assert.strictEqual(factButton('新增').pop().props.disabled, true, 'the add button is disabled while the sentence is empty')
+  factTextField.props.onChange({ target: { value: '定时总结在 23:30 跑一次。' } })
+  rerender()
+  const factScopeField = elements.find((element) => element.type === 'input' && element.props.placeholder === '作用域：全局 / 本机 / 工作区路径')
+  factScopeField.props.onChange({ target: { value: '全局' } })
+  rerender()
+  const factVerifyField = elements.find((element) => element.type === 'input' && element.props.placeholder === '验证命令（可选，例如 Test-Path ...）')
+  factVerifyField.props.onChange({ target: { value: 'Test-Path .' } })
+  rerender()
+  factButton('新增').pop().props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.strictEqual(factCalls('add').length, 1)
+  assert.deepStrictEqual(JSON.parse(factCalls('add')[0].body), {
+    text: '定时总结在 23:30 跑一次。',
+    scope: '全局',
+    verify: 'Test-Path .',
+    prompt: '',
+  })
+
   // A run that finishes while the page is open shows up as a banner within one poll.
   const withRun = (at) => {
     const next = JSON.parse(JSON.stringify(payload))
@@ -1165,6 +1247,7 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
     logDir: path.join(dir, 'logs'),
     identityFile: path.join(dir, 'identity.json'),
     lessonsFile: path.join(dir, 'lessons.md'),
+    factsFile: path.join(dir, 'facts.md'),
   }
   fs.mkdirSync(paths.dailyDir, { recursive: true })
   const base = applySuggestions(emptyProfile(PROFILE_SECTIONS, '用户画像'), PROFILE_SECTIONS, [
@@ -1313,6 +1396,40 @@ ok('routes: loopback guard, method checks, run/config/pin/history/rollback', asy
   assert.strictEqual((await call('lessons/approve', { method: 'POST', body: { id: 'rule-2' } })).status, 400, 'a non-pending rule cannot be approved')
   assert.ok(listHistory(paths, 'lessons').length >= 2, 'every lessons rewrite is backed up first')
   assert.strictEqual((await call('lessons/add', { method: 'POST', body: { text: 'x' }, remote: '10.1.2.3' })).status, 403)
+
+  // Facts: three human-only routes. No facts_add / facts_archive tool exists, so
+  // these routes are the only way in (besides editing the file by hand).
+  assert.strictEqual(statusBody.facts.stats.counts.fact, 0)
+  const factsAdd = await call('facts/add', { method: 'POST', body: {
+    text: 'DSH 装在 D:\\deepseekharness。',
+    scope: '本机',
+    verify: 'Test-Path "D:\\deepseekharness"',
+  } })
+  assert.strictEqual(factsAdd.status, 200, factsAdd.body)
+  const factsAdded = JSON.parse(factsAdd.body).facts
+  assert.strictEqual(factsAdded.stats.counts.fact, 1)
+  assert.strictEqual(factsAdded.sections[0].entries[0].verify, 'Test-Path "D:\\deepseekharness"', 'the verify command reaches the panel')
+  assert.ok(factsAdded.sections[0].entries[0].id.startsWith('fact-'))
+  assert.ok(fs.readFileSync(paths.factsFile, 'utf8').includes('DSH 装在 D:\\deepseekharness。'))
+  assert.strictEqual((await call('facts/add', { method: 'GET' })).status, 405, 'facts are written by POST only')
+  assert.strictEqual((await call('facts/add', { method: 'POST', body: { text: '   ' } })).status, 400, 'an empty fact is refused')
+  assert.strictEqual((await call('facts/add', { method: 'POST', body: { text: 'x' }, remote: '10.1.2.3' })).status, 403)
+  assert.strictEqual((await call('facts/archive', { method: 'POST', body: { id: 'fact-1', reason: '  ' } })).status, 400, 'retiring needs a reason')
+  assert.strictEqual((await call('facts/confirm', { method: 'POST', body: { id: 'fact-404' } })).status, 400, 'an unknown id is refused')
+  const confirmedFact = await call('facts/confirm', { method: 'POST', body: { id: 'fact-1' } })
+  assert.strictEqual(confirmedFact.status, 200)
+  assert.ok(listHistory(paths, 'facts').length >= 1, 'confirming backs up the version it replaces')
+  const archivedFact = await call('facts/archive', { method: 'POST', body: { id: 'fact-1', reason: '机器换了一台' } })
+  assert.strictEqual(archivedFact.status, 200)
+  const archivedBody = JSON.parse(archivedFact.body).facts
+  assert.strictEqual(archivedBody.stats.counts.fact, 0)
+  assert.strictEqual(archivedBody.sections[1].entries[0].invalidReason, '机器换了一台')
+  assert.ok(archivedBody.sections[1].entries[0].verify.includes('Test-Path'), 'the verify command is kept with the retired row')
+  assert.ok(logged.some((line) => line.startsWith('facts add')) && logged.some((line) => line.startsWith('facts archive')))
+  assert.ok(listHistory(paths, 'facts').length >= 2, 'every facts rewrite is backed up first')
+  const factsRestored = await call('rollback', { method: 'POST', body: { doc: 'facts', name: listHistory(paths, 'facts')[0].name } })
+  assert.strictEqual(factsRestored.status, 200, factsRestored.body)
+  assert.ok(JSON.parse(factsRestored.body).facts.text.includes('DSH 装在'), 'a facts backup restores through the same route as lessons')
 
   // The identity block has exactly one action: regenerate. No route accepts text.
   assert.strictEqual((await call('identity/refresh', { method: 'GET' })).status, 405)
@@ -2425,6 +2542,162 @@ ok('lessons: injection order, budget sharing, and the 40% ceiling', () => {
   const without = buildSectionText(paths, config, {})
   assert.ok(!without.includes('## 教训（'))
   assert.ok(without.includes('## 与用户协作的已知偏好'))
+})
+
+// ── facts (stage 1: human-written, tool-retrieved) ────────────────────────────
+
+ok('facts: add, parse, and render keep the verify line attached to its entry', () => {
+  const added = addManualFact(emptyFacts(), {
+    text: 'DSH 装在 D:\\deepseekharness，改完插件代码要重启桌面端才生效。',
+    scope: '本机',
+    verify: 'Test-Path "D:\\deepseekharness\\DeepSeekHarness.exe"',
+    anchor: { session: 'session-aaaa1111', note: '插件是进程内加载' },
+  }, { date: '2026-11-12' })
+  assert.strictEqual(added.changed, true, added.error)
+  const entries = parseFacts(added.text).get('fact')
+  assert.strictEqual(entries.length, 1)
+  assert.strictEqual(entries[0].id, 'fact-1')
+  assert.strictEqual(entries[0].scope, '本机')
+  assert.strictEqual(entries[0].lastConfirmed, '2026-11-12')
+  assert.ok(entries[0].verify.includes('Test-Path'), 'the command survives the round trip')
+  assert.ok(added.text.includes('  [验证] Test-Path'), 'it lives on the continuation line')
+  assert.ok(entries[0].anchor.note.includes('进程内加载'))
+
+  const duplicate = addManualFact(added.text, { text: 'DSH 装在 D:\\deepseekharness，改完插件代码要重启桌面端才生效。' }, { date: '2026-11-12' })
+  assert.strictEqual(duplicate.changed, false)
+  assert.ok(duplicate.error.includes('fact-1'), 'a near-copy points at the entry it duplicates')
+})
+
+ok('facts: retire needs a reason and keeps the sentence and its verify line', () => {
+  let text = emptyFacts()
+  text = addManualFact(text, {
+    text: 'DSH 装在 D:\\deepseekharness。',
+    scope: '本机',
+    verify: 'Test-Path "D:\\deepseekharness\\DeepSeekHarness.exe"',
+  }, { date: '2026-11-12' }).text
+  text = addManualFact(text, { text: 'persona-memory 的数据目录在 ~\\.dsh\\persona-memory。', scope: '本机' }, { date: '2026-11-12' }).text
+  const before = text
+  const retired = archiveFact(text, 'fact-1', '机器换了一台', { date: '2026-11-13' })
+  assert.strictEqual(retired.changed, true, retired.error)
+  const state = parseFacts(retired.text)
+  assert.strictEqual(state.get('fact').length, 1)
+  const archived = state.get('archive')[0]
+  assert.strictEqual(archived.id, 'fact-1')
+  assert.strictEqual(archived.text, 'DSH 装在 D:\\deepseekharness。')
+  assert.ok(archived.verify.includes('Test-Path'), 'the command is kept with the retired row')
+  assert.strictEqual(archived.invalidReason, '机器换了一台')
+  assert.deepStrictEqual(assertFactsAppendOnly(before, retired.text), [], 'retiring is append-only')
+
+  const noReason = archiveFact(text, 'fact-2', '   ', { date: '2026-11-13' })
+  assert.strictEqual(noReason.changed, false)
+  assert.ok(noReason.error.includes('原因'))
+})
+
+ok('facts: confirming moves the date and never the sentence', () => {
+  const text = addManualFact(emptyFacts(), { text: '定时总结在 23:30 跑一次。', scope: '全局' }, { date: '2026-11-12' }).text
+  const confirmed = confirmFact(text, 'fact-1', { date: '2026-12-01' })
+  assert.strictEqual(confirmed.changed, true, confirmed.error)
+  const entry = parseFacts(confirmed.text).get('fact')[0]
+  assert.strictEqual(entry.lastConfirmed, '2026-12-01')
+  assert.strictEqual(entry.text, '定时总结在 23:30 跑一次。')
+  assert.deepStrictEqual(assertFactsAppendOnly(text, confirmed.text), [])
+})
+
+ok('facts: search matches keywords, respects scope, and says so when nothing matches', () => {
+  let text = emptyFacts()
+  text = addManualFact(text, {
+    text: 'DSH 装在 D:\\deepseekharness。',
+    scope: '本机',
+    verify: 'Test-Path "D:\\deepseekharness\\DeepSeekHarness.exe"',
+  }, { date: '2026-11-12' }).text
+  text = addManualFact(text, { text: 'persona-memory 的数据目录在 ~\\.dsh\\persona-memory。', scope: '本机' }, { date: '2026-11-12' }).text
+  text = addManualFact(text, { text: '这个仓库要先构建客户端再刷新。', scope: 'D:\\work\\alpha' }, { date: '2026-11-12' }).text
+  text = addManualFact(text, { text: '别的工作区专属事实。', scope: 'D:\\work\\beta' }, { date: '2026-11-10' }).text
+
+  const hit = searchFacts(text, { query: 'deepseekharness', cwd: 'D:\\work\\alpha', today: '2026-11-12' })
+  assert.strictEqual(hit.hits, 1)
+  assert.ok(hit.text.includes('DSH 装在'))
+  assert.ok(hit.text.includes('验证：Test-Path'), 'the verify command rides along')
+  assert.strictEqual(hit.skipped, 1, 'the other workspace is reported, not injected')
+
+  const other = searchFacts(text, { query: '客户端', cwd: 'D:\\work\\beta', today: '2026-11-12' })
+  assert.strictEqual(other.hits, 0, 'a workspace fact never leaks into another workspace')
+
+  const miss = searchFacts(text, { query: 'npm 包名', cwd: 'D:\\work\\alpha', today: '2026-11-12' })
+  assert.strictEqual(miss.hits, 0)
+  assert.ok(miss.text.includes('没有找到'), 'a miss is an answer, not a guess')
+
+  const recent = searchFacts(text, { cwd: 'D:\\work\\alpha', today: '2026-11-12' })
+  assert.strictEqual(recent.hits, 3, 'an empty query lists the most recently confirmed entries')
+  assert.ok(!recent.text.includes('别的工作区专属事实'))
+})
+
+ok('facts: an old confirmation is marked possibly stale, never hidden', () => {
+  const text = addManualFact(emptyFacts(), { text: '临时端口是 65100。', scope: '本机' }, { date: '2026-01-01' }).text
+  const result = searchFacts(text, { query: '端口', cwd: 'D:\\work\\alpha', today: '2026-11-12' })
+  assert.strictEqual(result.hits, 1)
+  assert.ok(result.text.includes('[可能过期]'))
+  assert.ok(result.text.includes('临时端口是 65100'))
+})
+
+ok('facts: the append-only guard catches a rewritten sentence', () => {
+  const text = addManualFact(emptyFacts(), { text: '数据目录在 A。', scope: '全局' }, { date: '2026-11-12' }).text
+  const tampered = text.replace('数据目录在 A', '数据目录在 B')
+  assert.ok(assertFactsAppendOnly(text, tampered).some((violation) => violation.includes('文本被改写')))
+  assert.ok(assertFactsAppendOnly(text, emptyFacts()).some((violation) => violation.includes('被删除')))
+})
+
+ok('facts: a newline inside a sentence or a command is collapsed, not dropped', () => {
+  // A pasted shell command easily carries a line break; on the next parse that
+  // would become an orphan line and the entry would silently lose its tail.
+  const added = addManualFact(emptyFacts(), {
+    text: '第一段\n第二段',
+    verify: 'Test-Path foo\nTest-Path bar',
+  }, { date: '2026-11-12' })
+  assert.strictEqual(added.changed, true, added.error)
+  const entries = parseFacts(added.text).get('fact')
+  assert.strictEqual(entries.length, 1)
+  assert.strictEqual(entries[0].text, '第一段 第二段')
+  assert.strictEqual(entries[0].verify, 'Test-Path foo Test-Path bar')
+  assert.strictEqual(added.text.split('\n').filter((line) => line.startsWith('- [')).length, 1, 'still exactly one bullet line')
+  assert.deepStrictEqual(assertFactsAppendOnly(added.text, added.text), [], 'a read-back of the same document is a no-op')
+})
+
+ok('facts: confirming a hand-edited row without a [确认] tag still refreshes it', () => {
+  // The parser tolerates a missing tag, so the writer must not report success
+  // while leaving the row untouched.
+  const handEdited = [
+    '---', 'version: 1', 'updatedAt: 2026-11-01T00:00:00.000Z', 'title: 事实', '---', '',
+    '## 事实',
+    '- [fact-1] [作用域 全局] 没有确认标记的一条事实。',
+    '', '## 已作废', '',
+  ].join('\n')
+  const confirmed = confirmFact(handEdited, 'fact-1', { date: '2026-12-01' })
+  assert.strictEqual(confirmed.changed, true, confirmed.error)
+  assert.ok(confirmed.text.includes('[确认 2026-12-01]'), 'the tag is added, not silently skipped')
+  assert.strictEqual(parseFacts(confirmed.text).get('fact')[0].lastConfirmed, '2026-12-01')
+  assert.strictEqual(parseFacts(confirmed.text).get('fact')[0].text, '没有确认标记的一条事实。')
+})
+
+ok('facts: exactly 180 days without a confirmation counts as possibly stale', () => {
+  assert.strictEqual(FACT_STALE_DAYS, 180, 'the threshold the wording and the tests both assume')
+  const days = (a, b) => (Date.parse(`${b}T00:00:00`) - Date.parse(`${a}T00:00:00`)) / 86400000
+  assert.strictEqual(days('2026-05-16', '2026-11-12'), 180)
+  const old = addManualFact(emptyFacts(), { text: '端口是 65100。' }, { date: '2026-05-16' }).text
+  assert.ok(searchFacts(old, { query: '端口', today: '2026-11-12' }).text.includes('[可能过期]'))
+  // One day short of that is not stale, and stale rows are flagged, never hidden.
+  assert.ok(!searchFacts(old, { query: '端口', today: '2026-11-11' }).text.includes('[可能过期]'))
+  const described = describeFacts(old, { today: '2026-11-12' }).sections[0].entries[0]
+  assert.strictEqual(described.stale, true)
+  assert.strictEqual(described.text, '端口是 65100。', 'the entry is still listed')
+})
+
+ok('facts: a miss says so even when every fact belongs to another workspace', () => {
+  const text = addManualFact(emptyFacts(), { text: '只在 alpha 成立。', scope: 'D:\\work\\alpha' }, { date: '2026-11-12' }).text
+  const result = searchFacts(text, { query: 'alpha', cwd: 'D:\\work\\beta', today: '2026-11-12' })
+  assert.strictEqual(result.hits, 0)
+  assert.strictEqual(result.skipped, 1)
+  assert.ok(result.text.includes('不要据此推测'), 'an out-of-scope miss is still an answer, not a guess')
 })
 
 await Promise.all(pending)

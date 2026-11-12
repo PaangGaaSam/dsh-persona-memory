@@ -50,6 +50,17 @@ Lessons arrive through three entries:
 
 Scope v1 has two tiers only: **the current workspace (cwd)** and **global**. A lesson for another worktree never reaches this workspace's prompt. Each lesson also carries an anchor (date / session / the daily sentence); if that daily entry is deleted the lesson is kept and the panel shows the anchor as 「（原条目已删除）」.
 
+## The facts layer (looked up on demand, never injected)
+
+Lessons answer "what to do"; facts answer "what is": where it is installed, which version runs, how a path is laid out, what was decided back then. The two layers are deliberately opposite — lessons are injected every turn and must stay few and hard; facts **never enter the prompt** and are retrieved by keyword only when the model calls `facts_search`. A facts store can therefore keep growing while the per-turn prompt stays the same size.
+
+- `$DSH_HOME/persona-memory/facts.md`: **append-only and invalidate-only**. Every write compares each existing row's id / sentence / scope / verify command before and after; if any of them changed, the write is refused. Retiring requires a reason, and the sentence plus its `[验证]` command move to 已作废 together.
+- One row looks like `- [fact-1] [作用域 本机] [确认 2026-11-12] DSH lives in D:\deepseekharness（锚点：…）`, optionally followed by two continuation lines: `  [验证] Test-Path …` (one command that can re-prove the claim) and `  [回注] …` (stored, unused in v1). Because they are indented separate lines, a command containing brackets cannot break the parser.
+- Three scopes: **global / local machine / workspace path**. Retrieval carries global + local + the current workspace; facts that belong to another worktree are reported as "N more belong to another workspace", never mixed in.
+- Expiry: a row not re-confirmed for **180 days** is marked `[可能过期]`, but it is **neither deleted nor hidden**; one click on the panel's 确认 refreshes the date.
+- v1 is **human-write-only**: the settings-page 事实 card or `POST /persona-memory/facts/add`. There is no `facts_add` / `facts_archive` tool — the model can only call `facts_search`, so "facts never rewrite facts" is true in the code, not just in the docs.
+- A miss returns "nothing found … don't guess from this", so an empty result cannot turn into an invented answer.
+
 ## How the personality settles
 
 The personality is not a setting — it is an account of myself formed in conversation, where every line traces back to what actually happened on some day and what I concluded from it. Stage 1 therefore records a second list next to the **user** observations: **`self`, my own judgment at the time** (`observations` only feeds the profile, `self` only feeds the personality; the two never mix).
@@ -124,6 +135,7 @@ Models occasionally stop mid-sentence (stream cut, near-timeout) and leave the J
 | `persona_pin` / `persona_unpin` | Pin an entry by id (`[pref-1]` …) |
 | `persona_rollback` | List or restore pre-write backups |
 | `persona_note` | Append a user-dictated rule to the locked section |
+| `facts_search` | Look up facts by keyword (global + this machine + the current workspace), with anchors and verify commands; **never injected — this is the only reader** |
 
 ## Data layout
 
@@ -132,6 +144,7 @@ $DSH_HOME/persona-memory/
 ├── profile.md            # user profile (single source of truth)
 ├── persona.md            # my self-account (first person; old headings are read and rewritten)
 ├── lessons.md            # lessons (rules / experiences / retired; append-only, invalidate-only)
+├── facts.md              # facts (global / local / workspace; looked up on demand, never injected)
 ├── identity.json         # identity block cache (derived view; never written back)
 ├── config.json           # settings-page overrides (optional)
 ├── daily/YYYY-MM-DD.md   # summary / observations / my judgments / suspect lessons / follow-ups
@@ -168,16 +181,19 @@ $DSH_HOME/persona-memory/
 | `GET /persona-memory/config` | Editable config values and defaults |
 | `POST /persona-memory/config` | `{ patch }` — validate, persist, apply |
 | `POST /persona-memory/run` | `{ forcePersona }` — run the digest now |
-| `GET /persona-memory/documents` | The three documents as sections of entries, plus the latest daily note |
+| `GET /persona-memory/documents` | The four documents as sections of entries, plus the latest daily note |
 | `GET /persona-memory/models` | Provider and model catalogue for the dropdowns |
 | `POST /persona-memory/pin` | `{ doc, id, pinned }` |
-| `GET /persona-memory/history` | `?doc=profile`, `persona` or `lessons` — pre-write backups |
+| `GET /persona-memory/history` | `?doc=profile`, `persona`, `lessons` or `facts` — pre-write backups |
 | `POST /persona-memory/rollback` | `{ doc, name }` — restore one backup |
 | `POST /persona-memory/identity/refresh` | Regenerate the identity block from the current profile (**the only write action**, and there is no route that accepts its text) |
 | `POST /persona-memory/lessons/add` | `{ text, section, scope }` — add a lesson by hand |
 | `POST /persona-memory/lessons/approve` | `{ id }` — approve a proposed rule (refused once five are in force) |
 | `POST /persona-memory/lessons/reject` | `{ id, reason }` — retire it; **a reason is required**, the original text moves to 已作废 |
 | `POST /persona-memory/lessons/replace` | `{ id, text }` — rules only; the old wording is archived, the new one appended |
+| `POST /persona-memory/facts/add` | `{ text, scope, verify?, prompt?, note? }` — add one fact by hand (**no tool does this**) |
+| `POST /persona-memory/facts/archive` | `{ id, reason }` — retire; **reason required**, the sentence and its `[验证]` command are kept in 已作废 |
+| `POST /persona-memory/facts/confirm` | `{ id }` — refresh the confirmation date (only 180 unconfirmed days mark a row stale) |
 
 Every non-loopback request is rejected with 403; wrong methods get 405.
 
@@ -188,6 +204,7 @@ Every non-loopback request is rejected with 403; wrong methods get 405.
 - Model output must be JSON; parsing tolerates prose/fences but a bad generation only degrades that stage (the other stages still write).
 - **Scope v1 only trusts a cwd the host hands over**: it is not confirmed that the host rebuilds the prompt every turn, so `buildSectionText` takes `cwd` from the context when present and otherwise the host process cwd. Global lessons therefore always inject; a workspace lesson injects only when the host process runs in that workspace. Keyword and file-type matching are deliberately not implemented — a missed lesson beats a wrongly applied one.
 - Conflict detection is a mechanical scan (same scope + opposite polarity + text similarity ≥ 0.4), not semantic understanding: it catches clear opposites and can miss indirect phrasing. A false mark deletes nothing.
+- Fact retrieval is keyword matching (substring + terms), not semantic search: rephrasing can miss. It fails loudly instead of guessing — a miss says nothing is recorded. The retrieved text does enter that conversation as a tool result, so the next digest reads it (stage 1 already forbids writing technical conclusions into `self`, and `isSystemFactObservation` keeps system facts out of the profile).
 - Source changes to a `link:`-installed package need a host restart (the loader does not hot-reload linked sources, and the client bundle is served from `lib/client.js` as built).
 
 ## If this is useful to you

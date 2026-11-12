@@ -1,7 +1,7 @@
 # dsh-persona-memory — 项目状态（交接用）
 
-> 更新时间：**2026-11-12 10:40**。当前代码：**0.3.4**（`node test/run.mjs` → **69 项全过**）。运行中的进程是 10:02 加载的 **v0.3.3**：定时器改动已生效；0.3.4 的池子上限改动用的是同一份代码，**同样要等下次重启才生效**，版本号也要重启后才会显示 0.3.4。
-> compact 后先读 **§0 → §1 → §25（定时器与池子上限）→ §22（教训层）→ §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§25 是之后发生的事。
+> 更新时间：**2026-11-12 12:45**。当前代码：**0.3.5**（`node test/run.mjs` → **79 项全过**）。日志显示进程 10:17 加载了 **v0.3.4**、12:10 加载了 **v0.3.5**（`facts_search` 已经出现在会话工具列表里，说明后端事实层在跑）；但这一轮 review 的修复、设置页「事实」卡片和文档都是 12:10 之后才改的，**还要再重启一次**，面板另需刷新页面。
+> compact 后先读 **§0 → §1 → §26（事实层）→ §25（定时器与池子上限）→ §22（教训层）→ §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§26 是之后发生的事。
 
 ---
 
@@ -12,11 +12,12 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 ## 1. 当前状态
 
 - **0.3.3（2026-11-12）**：定时触发换成单一内存游标 `nextDueAt` —— 到点执行、**错过不回跑**、错过只留一条 `warn`（旧逻辑按「今天跑过没有」判断，17:00 跑过一次就把 23:30 吃掉，且什么都不记）。已重启生效：`logs/run-2026-11-12.jsonl` 里 10:02 的 `loaded: v0.3.3`。
-- **0.3.4（2026-11-12）**：教训池 `LESSON_LIMITS` 5/5 → **10/25**（注入预算不变），面板新增「另有 N 条因提示预算未注入」（`injected.budgetSkipped`）。代码已提交（`fa81276` / GitHub `main`），**还没重启**，所以跑着的进程仍是 0.3.3。
+- **0.3.4（2026-11-12）**：教训池 `LESSON_LIMITS` 5/5 → **10/25**（注入预算不变），面板新增「另有 N 条因提示预算未注入」（`injected.budgetSkipped`）。已重启生效：日志 10:17 的 `loaded: v0.3.4`。
+- **0.3.5（2026-11-12）**：新增**事实层**（§26）：`facts.md` + `facts_search` 工具 + 设置页「事实」卡片 + 三条人写路由（`facts/add | archive | confirm`）。**不进提示词**，按需检索；v1 故意不注册模型可调用的写工具。测试 69 → 79。日志 12:10 已加载 `v0.3.5`（工具已在会话里），但本轮的 review 修复与面板卡片在其后，**仍需再重启**。
 
 - 包：`D:\dsh-persona-memory`；profile `desktop` 以 `link:` 安装（`dsh.profile.bundles` 含 `dsh-persona-memory`）。
-- 版本 **0.3.4**（0.2.1 → … → 0.3.4，跨 11-10 / 11-12）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
-- 测试：`node test/run.mjs` → **69 项全过**；`node --check lib/*.js` 全过。
+- 版本 **0.3.5**（0.2.1 → … → 0.3.5，跨 11-10 / 11-12）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
+- 测试：`node test/run.mjs` → **79 项全过**；`node --check lib/*.js` 全过。
 - **0.3.0 新增教训层**（§22）：`lessons.md` + 日报 `## 可疑雷点` + 设置页「教训」卡片 + 注入顺序/预算改版。第一次跑完日更才会出现 `lessons.md`。
 - 0.2.5 已实测：6 个会话 → 18 条 self notes，日报的 `## 我的判断` 正常落盘；但**自述合并失败**（`persona: no JSON object`），已在 0.2.6 修（见 §18）。
 - **0.2.6 已实测通过**（18:16–18:26 那轮）：6 会话 → `persona: +5 ~0 ↑0 ↓0 x0 (v3)`，第一次解析就成功、没走重试；日报证据变成 `2026-11-10/session-7b3c4fb6` 等**5 个不同会话**；`persona.md` 出现 5 条第一人称自述。
@@ -43,20 +44,21 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 
 | 文件 | 职责 | 关键点 |
 |---|---|---|
-| `lib/index.js` | 插件入口 | `apply()` 注册 6 个工具、注入段、HTTP 路由、60s 定时器 + 45s 启动 tick（判定走 `lib/schedule.js`）；`config` 是 `let`，设置页改完即时生效；`runOnce()` 负责锁/状态/记录 |
+| `lib/index.js` | 插件入口 | `apply()` 注册 7 个工具（含只读的 `facts_search`）、注入段、HTTP 路由、60s 定时器 + 45s 启动 tick（判定走 `lib/schedule.js`）；`config` 是 `let`，设置页改完即时生效；`runOnce()` 负责锁/状态/记录 |
 | `lib/schedule.js` | 定时判定（纯函数） | `SLOT_GRACE_MS`（10 分钟宽限）、`nextSlotAfter(from, minutes)`（严格晚于 from 的本地墙钟点）、`decideSlot` → `wait`/`run`/`missed`；游标只在内存，错过不回跑（§25） |
 | `lib/config.js` | 配置 | `DEFAULTS`、`EDITABLE_KEYS`、`resolveConfig`（校验 + scheduleMinutes）、`composeConfig`（DEFAULTS → 补丁行 → config.json）、`loadOverrides`/`saveOverrides`、`publicConfig` |
 | `lib/digest.js` | 三段 LLM 管线 | stage1 每会话一卡（`cites` 引用消息号、`lessons` 候选）、stage2 日报（含 `lessons` → `## 可疑雷点`）、stage3 画像建议、`personaStage`（读近 N 天日报 + 当日卡片）、`lessonsStage`（候选 + 后果信号 + 已有教训原文，**不读 persona.md**）；`callLlm` 带超时；`parseDailyObservations`/`parseDailyLessons`/`detectConsequenceSignals` |
 | `lib/lessons.js` | 教训文档（操作层） | `parseLessons`/`assertAppendOnly`；行级手术 `appendLesson`/`archiveLesson`/`approveLesson`/`replaceLesson`；`applyLessonSuggestions`（上限 10/25、exp 合并 0.85、90 天作废、铁律转待确认）；`conflictPairs`（同 scope + 极性相反 + 相似度 ≥0.4）；`renderLessonsInjection`；`consecutiveEmptyDays` |
+| `lib/facts.js` | 事实文档（按需检索层） | `parseFacts`/`assertFactsAppendOnly`；`addManualFact`/`archiveFact`/`confirmFact`（全走 append-only 断言，作废必填原因）；`[验证]`/`[回注]` 是缩进续行；`searchFacts`（全局 + 本机 + 当前 cwd，命中不到就说没记录）；`describeFacts`（180 天标「可能过期」，不删除）；**没有注入渲染函数**（§26） |
 | `lib/profile.js` | 文档解析/合并 | `parseProfile`/`serialize`/`readMeta`；证据 `parseEvidence`/`formatEvidence`/`evidenceStats`；`applySuggestions`（画像）；`applyPersonaSuggestions`（性格升降级 + supersedes + 衰减）；三段注入渲染的逐行预算判断都按「拼接后的真实长度」算，不再多扣 1 字符 |
 | `lib/report.js` | 运行摘要文案（纯函数） | `formatReport(report, opts)` 生成工具返回与面板横幅共用的那段文字；教训输出被截断时追加「本次输出被截断，只收下 N 条」，且不再同时说「没有新的可写条目」 |
-| `lib/history.js` | 备份与回滚 | `backupDocument`、`listHistory`、`restoreHistory`（回滚前先备份当前，可逆；文件名正则校验防穿越）；`HISTORY_DOCS = profile/persona/lessons` |
-| `lib/http.js` | 回环路由 | `registerRoutes`（12 条，含 4 条 `lessons/*`）、`readJsonBody`（128KB 上限）、`describeDocument`/`describeLessons`/`documentsPayload`；全部仅回环，方法不符 405 |
+| `lib/history.js` | 备份与回滚 | `backupDocument`、`listHistory`、`restoreHistory`（回滚前先备份当前，可逆；文件名正则校验防穿越）；`HISTORY_DOCS = profile/persona/lessons/facts` |
+| `lib/http.js` | 回环路由 | `registerRoutes`（16 条，含 4 条 `lessons/*`、3 条 `facts/*`）、`readJsonBody`（128KB 上限）、`describeDocument`/`describeLessons`/`documentsPayload`；全部仅回环，方法不符 405 |
 | `lib/state.js` | 调度状态 | `loadState`（去 BOM、解析失败回调）、`saveState`、`recordRun`（含 profile/persona/lessons 摘要）、`statusOf`、锁（10 分钟陈旧）、`createLogger`（jsonl 审计） |
-| `lib/inject.js` | 注入段 | `planBudget`（基线 55/25/20，教训上限 40%，空层额度让渡）、`renderLayers`（面板和提示词共用同一份结果）、`buildSectionText`（顺序 教训 → 画像 → 自述，事实层占位）；带 `<!-- persona-memory:do-not-digest -->` 标记防回环 |
+| `lib/inject.js` | 注入段 | `planBudget`（基线 55/25/20，教训上限 40%，空层额度让渡）、`renderLayers`（面板和提示词共用同一份结果）、`buildSectionText`（顺序 教训 → 画像 → 自述）；带 `<!-- persona-memory:do-not-digest -->` 标记防回环。**事实层不经过这里**（§26） |
 | `lib/collector.js` | 采集 | 扫 `$DSH_HOME/sessions/<ws>/<session>/session.v4.jsonl.zstd`；多帧 zstd 按魔数切帧；过滤注入消息与自身标记 |
 | `lib/util.js` | 工具 | `readText`（去 BOM）、`writeTextAtomic`、`readJson`、`parseTimeOfDay`、`similarity`（二元组重合）、`todayKey` |
-| `lib/client.js` | 设置页（浏览器半侧） | `window.__ModuleLoader__.load` CJS 工厂；注册 `settings.section`（id `persona-memory`，order 60）；轮询 15s 出运行横幅；乐观开关 + 静默保存；样式只用真实主题变量 |
+| `lib/client.js` | 设置页（浏览器半侧） | `window.__ModuleLoader__.load` CJS 工厂；注册 `settings.section`（id `persona-memory`，order 60）；轮询 15s 出运行横幅；乐观开关 + 静默保存；7 张卡片（状态 / 设置 / 画像 / 身份块 / 自述 / 教训 / **事实** + 备份 + 日报）；样式只用真实主题变量 |
 
 ## 4. 关键约定（后续讨论会反复用到）
 
@@ -657,3 +659,60 @@ DSH 进程 17:49 启动后整夜未重启（PID 仍在），系统日志无睡�
 - 游标只在内存：进程重启后按「下一个未来槽」重新 arm，重启前错过的那次不补 —— 这是本版需求，不是缺陷。
 - 跨夏令时地区会偏一小时（用本地零点 + 分钟构造，不用 `setHours`），本插件不考虑。
 - 池子变大后教训层仍按字符预算截断：面板现在会显示被预算挡掉的条数，但注入总量不变。
+## 26. v0.3.5 —— 事实层（按需检索，绝不进提示词）
+
+另一个会话先写了后端，这一轮是 review + 补齐面板/文档/测试。`facts.md` 是第四份文档，和前三份的关系：画像/自述回答「你是谁 / 我是谁」，教训回答「该怎么做」，事实回答「是什么」。
+
+### 结构（`lib/facts.js`，`$DSH_HOME/persona-memory/facts.md`）
+
+```md
+## 事实
+- [fact-1] [作用域 本机] [确认 2026-11-12] DSH 装在 D:\deepseekharness（锚点：2026-11-12/session-xxxx · 插件是进程内加载）
+  [验证] Test-Path "D:\deepseekharness\DeepSeekHarness.exe"
+  [回注] 重启宿主
+## 已作废
+- [fact-2] [作用域 全局] [作废 2026-11-13] [原因 机器换了一台] [确认 2026-11-01] 旧机器端口是 65100（锚点：人工新增）
+```
+
+- `[验证]` / `[回注]` 是**缩进续行**，不是同一行的标签 —— 命令里带方括号、管道、引号都不会破坏解析（有专门测试）。
+- 作用域三档：全局 / 本机 / 工作区路径。检索 = 全局 + 本机 + 当前 cwd，其余计入 `skipped`。
+- 只追加、只作废：`assertFactsAppendOnly` 比对 id / 原句 / 作用域 / 验证命令；作废必填原因，原句与 `[验证]` 一起搬进「已作废」，id 不变。
+- 180 天没再确认 → 标 `[可能过期]`，不删除、不隐藏。
+- 没命中 → 「没有找到…不要据此推测」（包括「事实都在别的工作区」这种情况）。
+
+### 写入口只有人
+
+设置页「事实」卡片 → `POST /persona-memory/facts/{add,archive,confirm}`。**故意不注册 `facts_add` / `facts_archive` 工具**：模型能调用的只有只读的 `facts_search`，所以「事实不改写事实」是代码约束。每次写入前 `backupDocument(..., 'facts', ...)`，`history` / `rollback` 也支持 `facts`。
+
+### review 发现并直接修掉的问题（后端原稿）
+
+1. **换行会毁条目**：`addManualFact` 只 `trim().slice()`，句子或验证命令里带 `\n` 时，第二次解析会把后半句变成孤立行 —— 条目静默截断。改为 `oneLine()`（换行折叠成空格）后再落盘，text/scope/verify/prompt/anchor 四处都过。
+2. **手改缺 `[确认]` 标签时「确认成功」其实什么都没改**：`confirmFact` 的 `replace` 匹配不到就原样写回，却报 `changed: true` 并推进版本。改为三级兜底（已有标签 → 作用域标签后插入 → id 后插入）。
+3. **180 天边界差一天**：`> FACT_STALE_DAYS` 让「正好 180 天没确认」仍算新鲜；按「180 天没再确认」改为 `>=`（两条判断都在，`searchFacts` 与 `describeFacts`）。
+4. **作用域外全空时的措辞**没带「不要据此推测」，只有「没有找到与「query」相关」那条带 —— 补上。
+5. 顺带修：`confirmedSort` 挤成一行、`documentsPayload` 注释写「三份文档」、`listHistory` 的 JSDoc 只写 profile/persona。
+
+未改（刻意）：`addManualFact` 的重复判定仍是**跨作用域**的（同一句话挂在两个作用域会先在搜索结果里变成两行噪音）—— 另一个会话的测试已经按这个口径写了。
+
+### 面板
+
+「事实」卡片与教训卡片同构：标题下第一行就写「不常驻提示」，然后是计数（生效 / 已作废）、条目（id、作用域、确认日、锚点、验证命令、`可能过期`）、新增表单（内容 + 作用域 + 验证命令 + 可选回注）、每行的「确认」「作废（原因必填）」。失败提示挂在卡片内，不弹窗。数字全部来自 `/documents` 的 `facts` 字段（由真实文档渲染出来）。
+
+### 测试（69 → 79）
+
+- 解析/写入：续行归属、作废保留原句与验证命令、确认只动日期、作用域过滤 + `skipped`、180 天边界（正好 180 天即过期，179 天不过期）、空命中措辞、**换行折叠**、**手改缺标签仍能确认**、append-only 篡改检测。
+- 路由（折进既有的 routes 测试）：`GET facts/add` → 405、非回环 → 403、空内容 → 400、缺原因 → 400、未知 id → 400、写入前有 `facts-*.md` 备份、确认/作废各生成一份备份、`rollback` 能恢复 facts。
+- 面板（折进既有的 client 测试）：计数、条目、`可能过期`、验证命令、作废原因、确认 → `{id}`、作废 → `{id, reason}`、新增 → `{text, scope, verify, prompt}`，以及「原因没填时确认按钮禁用」。
+
+### 验证步骤（0.3.5，需重启）
+
+1. 重启 → 状态卡 `v0.3.5`；工具列表里出现 `facts_search`（只读）。
+2. 设置 → 记忆与画像：出现「事实」卡片（空库时显示空态文案）；新增一条 → 立刻出现在列表里，`facts.md` 生成。
+3. 让模型调用 `facts_search` 问一个已记录的事实 → 返回条目 + 验证命令；问一个没记录的 → 返回「没有找到…不要据此推测」。
+4. 检查注入：新对话的系统提示里**没有**事实段（`buildSectionText` 不引用它）。
+
+### 已知限制
+
+- 检索是关键词匹配，不是语义检索：换个说法可能搜不到；宁漏勿错。
+- 检索结果会作为工具结果进入本次对话，因此下一次日更会读到它（stage-1 已禁止把系统技术结论写进 `self`，`isSystemFactObservation` 再把系统类事实挡在画像外）。
+- `[回注]` 只存不用（v1）；日更自动提取事实留到下一阶段。
