@@ -1,21 +1,22 @@
 # dsh-persona-memory — 项目状态（交接用）
 
-> 更新时间：**2026-11-12 10:05**。当前版本：**0.3.4**（69 项测试全过；0.3.3 的定时器改动已重启生效，0.3.4 的池子上限改动同样已生效，版本号下次重启才会显示 0.3.4）。
-> compact 后先读 **§0 → §1 → §22（教训层）→ §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§22 是之后发生的事。
+> 更新时间：**2026-11-12 10:40**。当前代码：**0.3.4**（`node test/run.mjs` → **69 项全过**）。运行中的进程是 10:02 加载的 **v0.3.3**：定时器改动已生效；0.3.4 的池子上限改动用的是同一份代码，**同样要等下次重启才生效**，版本号也要重启后才会显示 0.3.4。
+> compact 后先读 **§0 → §1 → §25（定时器与池子上限）→ §22（教训层）→ §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§25 是之后发生的事。
 
 ---
 
 ## 0. 一句话
 
-DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 → 增量维护**用户画像**（profile.md）、**我的自述**（persona.md，第一人称、从对话里长出来、按证据累积）和**教训**（lessons.md，铁律 / 时效经验 / 已作废，只追加、只作废）→ 每轮对话按 `事实(占位) → 教训 → 画像 → 自述` 注入 → 自带设置页可看可调。已发布到 GitHub，收录 PR 在审。
+DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 → 增量维护**用户画像**（profile.md）、**我的自述**（persona.md，第一人称、从对话里长出来、按证据累积）和**教训**（lessons.md，铁律 / 时效经验 / 已作废，只追加、只作废）→ 每轮对话按 `事实(占位) → 教训 → 画像 → 自述` 注入 → 自带设置页可看可调。已发布到 GitHub，市场收录 PR 已合并（§16）。
 
 ## 1. 当前状态
 
-- **0.3.3（2026-11-12）**：① 定时触发换成单一内存游标 `nextDueAt` —— 到点执行、**错过不回跑**、错过只留一条 warning（旧逻辑按「今天跑过没有」判断，17:00 跑过一次就把 23:30 吃掉，且什么都不记）；② 教训池 `LESSON_LIMITS` 5/5 → **10/25**，注入预算不变，面板新增「另有 N 条因提示预算未注入」（`injected.budgetSkipped`）。两项都已重启生效（10:02 加载），版本号 0.3.4 在下次重启后显示。
+- **0.3.3（2026-11-12）**：定时触发换成单一内存游标 `nextDueAt` —— 到点执行、**错过不回跑**、错过只留一条 `warn`（旧逻辑按「今天跑过没有」判断，17:00 跑过一次就把 23:30 吃掉，且什么都不记）。已重启生效：`logs/run-2026-11-12.jsonl` 里 10:02 的 `loaded: v0.3.3`。
+- **0.3.4（2026-11-12）**：教训池 `LESSON_LIMITS` 5/5 → **10/25**（注入预算不变），面板新增「另有 N 条因提示预算未注入」（`injected.budgetSkipped`）。代码已提交（`fa81276` / GitHub `main`），**还没重启**，所以跑着的进程仍是 0.3.3。
 
 - 包：`D:\dsh-persona-memory`；profile `desktop` 以 `link:` 安装（`dsh.profile.bundles` 含 `dsh-persona-memory`）。
-- 版本 **0.3.0**（0.2.1 → … → 0.3.0，跨 11-10 / 11-11）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
-- 测试：`node test/run.mjs` → **57 项全过**；`node --check lib/*.js` 全过。
+- 版本 **0.3.4**（0.2.1 → … → 0.3.4，跨 11-10 / 11-12）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
+- 测试：`node test/run.mjs` → **69 项全过**；`node --check lib/*.js` 全过。
 - **0.3.0 新增教训层**（§22）：`lessons.md` + 日报 `## 可疑雷点` + 设置页「教训」卡片 + 注入顺序/预算改版。第一次跑完日更才会出现 `lessons.md`。
 - 0.2.5 已实测：6 个会话 → 18 条 self notes，日报的 `## 我的判断` 正常落盘；但**自述合并失败**（`persona: no JSON object`），已在 0.2.6 修（见 §18）。
 - **0.2.6 已实测通过**（18:16–18:26 那轮）：6 会话 → `persona: +5 ~0 ↑0 ↓0 x0 (v3)`，第一次解析就成功、没走重试；日报证据变成 `2026-11-10/session-7b3c4fb6` 等**5 个不同会话**；`persona.md` 出现 5 条第一人称自述。
@@ -42,11 +43,13 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 
 | 文件 | 职责 | 关键点 |
 |---|---|---|
-| `lib/index.js` | 插件入口 | `apply()` 注册 6 个工具、注入段、HTTP 路由、60s 定时器 + 45s 启动补跑；`config` 是 `let`，设置页改完即时生效；`runOnce()` 负责锁/状态/记录 |
+| `lib/index.js` | 插件入口 | `apply()` 注册 6 个工具、注入段、HTTP 路由、60s 定时器 + 45s 启动 tick（判定走 `lib/schedule.js`）；`config` 是 `let`，设置页改完即时生效；`runOnce()` 负责锁/状态/记录 |
+| `lib/schedule.js` | 定时判定（纯函数） | `SLOT_GRACE_MS`（10 分钟宽限）、`nextSlotAfter(from, minutes)`（严格晚于 from 的本地墙钟点）、`decideSlot` → `wait`/`run`/`missed`；游标只在内存，错过不回跑（§25） |
 | `lib/config.js` | 配置 | `DEFAULTS`、`EDITABLE_KEYS`、`resolveConfig`（校验 + scheduleMinutes）、`composeConfig`（DEFAULTS → 补丁行 → config.json）、`loadOverrides`/`saveOverrides`、`publicConfig` |
 | `lib/digest.js` | 三段 LLM 管线 | stage1 每会话一卡（`cites` 引用消息号、`lessons` 候选）、stage2 日报（含 `lessons` → `## 可疑雷点`）、stage3 画像建议、`personaStage`（读近 N 天日报 + 当日卡片）、`lessonsStage`（候选 + 后果信号 + 已有教训原文，**不读 persona.md**）；`callLlm` 带超时；`parseDailyObservations`/`parseDailyLessons`/`detectConsequenceSignals` |
-| `lib/lessons.js` | 教训文档（操作层） | `parseLessons`/`assertAppendOnly`；行级手术 `appendLesson`/`archiveLesson`/`approveLesson`/`replaceLesson`；`applyLessonSuggestions`（上限 5/5、exp 合并 0.85、90 天作废、铁律转待确认）；`conflictPairs`（同 scope + 极性相反 + 相似度 ≥0.4）；`renderLessonsInjection`；`consecutiveEmptyDays` |
+| `lib/lessons.js` | 教训文档（操作层） | `parseLessons`/`assertAppendOnly`；行级手术 `appendLesson`/`archiveLesson`/`approveLesson`/`replaceLesson`；`applyLessonSuggestions`（上限 10/25、exp 合并 0.85、90 天作废、铁律转待确认）；`conflictPairs`（同 scope + 极性相反 + 相似度 ≥0.4）；`renderLessonsInjection`；`consecutiveEmptyDays` |
 | `lib/profile.js` | 文档解析/合并 | `parseProfile`/`serialize`/`readMeta`；证据 `parseEvidence`/`formatEvidence`/`evidenceStats`；`applySuggestions`（画像）；`applyPersonaSuggestions`（性格升降级 + supersedes + 衰减）；三段注入渲染的逐行预算判断都按「拼接后的真实长度」算，不再多扣 1 字符 |
+| `lib/report.js` | 运行摘要文案（纯函数） | `formatReport(report, opts)` 生成工具返回与面板横幅共用的那段文字；教训输出被截断时追加「本次输出被截断，只收下 N 条」，且不再同时说「没有新的可写条目」 |
 | `lib/history.js` | 备份与回滚 | `backupDocument`、`listHistory`、`restoreHistory`（回滚前先备份当前，可逆；文件名正则校验防穿越）；`HISTORY_DOCS = profile/persona/lessons` |
 | `lib/http.js` | 回环路由 | `registerRoutes`（12 条，含 4 条 `lessons/*`）、`readJsonBody`（128KB 上限）、`describeDocument`/`describeLessons`/`documentsPayload`；全部仅回环，方法不符 405 |
 | `lib/state.js` | 调度状态 | `loadState`（去 BOM、解析失败回调）、`saveState`、`recordRun`（含 profile/persona/lessons 摘要）、`statusOf`、锁（10 分钟陈旧）、`createLogger`（jsonl 审计） |
@@ -615,3 +618,42 @@ AssertionError: the form is still rendered while the save is in flight
 
 - `normalizeTimeText` 在 `lib/util.js` 和 `lib/client.js` 各有一份：客户端半身是手写的单文件 CJS，不能 import 宿主侧模块。
 - 归一化只在前端和解析时发生：手写进 `config.json` 的全角时间会**原样保留**在文件里（`scheduleMinutes` 与调度正确，面板显示时归一化）。从页面保存的永远是半角。
+
+## 25. v0.3.3 + v0.3.4 —— 定时器游标（不回跑）与教训池上限
+
+### 现场（2026-11-11 23:30 没有触发）
+
+DSH 进程 17:49 启动后整夜未重启（PID 仍在），系统日志无睡眠/唤醒；`logs/run-2026-11-11.jsonl` 最后一条是 20:41 的人工 `lessons add`，`state.json` 最后一条 run 是 17:17（ok）。
+
+### 根因
+
+1. `tick` 用 `state.lastRunDay === todayKey(now)` 判「今天跑过没有」，而 `recordRun` **任何一次跑都会写** `lastRunDay` —— 17:00 那次定时跑把它写成 `2026-11-11`，23:30 的 tick 直接 return。按日期去重，而需求是按定时点去重。
+2. 启动判断 `minutes < config.scheduleMinutes` 要求「当前时刻也已过今天的定时点」，早上 09:32 启动时未到 23:30，昨晚那槽永远不会被判定为到期。
+
+### 改法
+
+| 位置 | 改动 |
+|---|---|
+| `lib/schedule.js`（新增） | `SLOT_GRACE_MS = 10 分钟`（一次 tick 抖动不丢整次）；`nextSlotAfter(from, scheduleMinutes)` 取 from 的本地零点 + 分钟数，**严格晚于** from 否则 +86400000；`decideSlot({now, nextDueAt, graceMs})` → `wait` / `run` / `missed`，非有限游标给 `missed`（不许「永远不跑也不报」） |
+| `lib/index.js` | 加载时 `let nextDueAt = nextSlotAfter(Date.now(), config.scheduleMinutes)` + `armNext(from = Date.now())`；`tick`：`wait` 直接返回、`missed` 写 `scheduled slot passed by N min, skipped (no catch-up)` 后 `armNext`、`run` 时**先** `armNext` 再 `runOnce(false)`（跑 17 分钟跨过下个 tick 也不会重跑）；`applyConfig` 成功后 `armNext()`；45s 启动 tick 保留；`state.js` / `recordRun` / `state.json` **一律没动**，`lastRunDay` 只为面板显示；手动 `runOnce(true)` 不碰 `nextDueAt` |
+| `lib/lessons.js` | `LESSON_LIMITS` 5/5 → **10/25**；注释写明上限约束的是 `lessons.md` 里装多少条，不是提示里读多少条 |
+| `lib/inject.js` / `lib/http.js` | `renderLayers` 多算一个 `budgetSkipped = scope.rows.length - 实际渲染条数`，经 `documentsPayload` 送出 |
+| `lib/client.js` | 新文案 `lessonsBudgetSkipped`（中/英）+「教训」卡片一行提示 |
+
+### 测试（63 → 69）
+
+- 定时器 6 条：`nextSlotAfter` 严格大于（09:32 → 当天；23:29 → 当天；23:30:00.000 → **次日**）；三态（点前 1 秒 `wait`、点后 0 秒/5 分钟 `run`、点后 11 分钟/3 天 `missed`）；**回归**：`lastRunDay='2026-11-11'` 且 now=23:30 仍 `run`（`decideSlot` 根本不接收 state）；17:49 加载后 341 个 tick 全 `wait`、23:30 `run`、arm 后 23:31 `wait`、次日 23:30 `run`；错过不回跑（11-11 23:30 → 11-12 09:32 `missed`，arm 后 `wait`）；`scheduleMinutes` 为 NaN/undefined/Infinity/`'23:30'` → NaN 且 `missed`，不抛。
+- 池子上限：测试 fixture 由 `LESSON_LIMITS` 驱动（10 条铁律 / 25 条经验），超出的新增被拒且错误文案带真实上限；`approve` 不能越过上限；超出后只留在日报。
+- 既有 63 项原样通过。
+
+### 验证步骤（0.3.4，需重启）
+
+1. 重启 → 状态卡 `v0.3.4`；`logs/run-<day>.jsonl` 里 `loaded: v0.3.4`。
+2. 今晚 23:30 的 tick 应写 `scheduled run (on time)` 并执行；如果那会儿进程不可用、23:40 之后才被看到，则写 `scheduled slot passed by N min, skipped (no catch-up)` 且**不补跑**。
+3. 设置 → 记忆与画像 →「教训」卡片：注入条目超过提示预算时出现「另有 N 条因提示预算未注入，仍留在教训文件里」。
+
+### 已知限制
+
+- 游标只在内存：进程重启后按「下一个未来槽」重新 arm，重启前错过的那次不补 —— 这是本版需求，不是缺陷。
+- 跨夏令时地区会偏一小时（用本地零点 + 分钟构造，不用 `setHours`），本插件不考虑。
+- 池子变大后教训层仍按字符预算截断：面板现在会显示被预算挡掉的条数，但注入总量不变。
