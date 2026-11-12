@@ -19,6 +19,7 @@ import {
   describeLessons,
   emptyLessons,
   formatDailyLesson,
+  LESSON_LIMITS,
   lessonsStats,
   parseDailyLessons,
   parseLessons,
@@ -46,6 +47,7 @@ import {
 import { extractJson, extractJsonReport, lessonsStage, parseCard, parseDaily, parseDailyObservations, parseLessonSuggestions, parsePersonaSuggestions, parseSuggestions, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites, detectConsequenceSignals } from '../lib/digest.js'
 import { formatReport } from '../lib/report.js'
 import { PERSONA_HEADING, buildSectionText, planBudget, renderLayers } from '../lib/inject.js'
+import { decideSlot, nextSlotAfter } from '../lib/schedule.js'
 import { normalizeTimeText, parseTimeOfDay, resolveDshHome } from '../lib/util.js'
 
 let passed = 0
@@ -1350,6 +1352,78 @@ ok('state: a BOM-prefixed or corrupt state file cannot silently reset the schedu
   assert.deepStrictEqual(loadState(path.join(dir, 'missing.json')).runs, [])
 })
 
+// ── scheduling: one in-memory cursor, no catch-up ────────────────────────────
+// The 2026-11-11 accident: the 17:00 run wrote lastRunDay, the 23:30 tick read
+// "today already ran" and returned, and nothing was logged.
+
+const localTime = (month, day, hour, minute, second = 0) => new Date(2026, month - 1, day, hour, minute, second, 0)
+const SCHEDULE_2330 = 23 * 60 + 30
+/** A local wall-clock time on 2026-11-11, from minutes since its midnight. */
+const minuteOfDay11 = (minutes) => new Date(2026, 10, 11, 0, 0, 0, 0).getTime() + minutes * 60000
+
+ok('schedule: the next slot is strictly after now', () => {
+  assert.strictEqual(nextSlotAfter(localTime(11, 12, 9, 32).getTime(), SCHEDULE_2330), localTime(11, 12, 23, 30).getTime())
+  assert.strictEqual(nextSlotAfter(localTime(11, 12, 23, 29).getTime(), SCHEDULE_2330), localTime(11, 12, 23, 30).getTime(), 'the slot still ahead today wins')
+  assert.strictEqual(nextSlotAfter(localTime(11, 12, 23, 30).getTime(), SCHEDULE_2330), localTime(11, 13, 23, 30).getTime(), 'exactly at the slot, the next one is due')
+})
+
+ok('schedule: on time, late, and missed are three different answers', () => {
+  const slot = localTime(11, 12, 23, 30).getTime()
+  assert.strictEqual(decideSlot({ now: slot - 1000, nextDueAt: slot }), 'wait')
+  assert.strictEqual(decideSlot({ now: slot, nextDueAt: slot }), 'run', 'right on the minute')
+  assert.strictEqual(decideSlot({ now: slot + 5 * 60000, nextDueAt: slot }), 'run', 'inside the ten-minute grace window')
+  assert.strictEqual(decideSlot({ now: slot + 11 * 60000, nextDueAt: slot }), 'missed')
+  assert.strictEqual(decideSlot({ now: slot + 3 * 86400000, nextDueAt: slot }), 'missed', 'days late is still just missed, never replayed')
+})
+
+ok('schedule: the decision never looks at what ran today', () => {
+  // The exact accident: lastRunDay is already 2026-11-11 (written by the 17:00
+  // run) and the 23:30 slot must still fire. decideSlot takes no state at all.
+  const state = { lastRunDay: '2026-11-11' }
+  const slot = localTime(11, 11, 23, 30).getTime()
+  assert.strictEqual(state.lastRunDay, '2026-11-11')
+  assert.strictEqual(decideSlot({ now: slot, nextDueAt: slot }), 'run')
+})
+
+ok('schedule: a tick sequence fires at 23:30 and only once a day', () => {
+  let nextDueAt = nextSlotAfter(localTime(11, 11, 17, 49).getTime(), SCHEDULE_2330)
+  assert.strictEqual(nextDueAt, localTime(11, 11, 23, 30).getTime(), 'loading at 17:49 arms tonight, not tomorrow')
+  const before = []
+  for (let minute = 17 * 60 + 49; minute <= 23 * 60 + 29; minute += 1) {
+    before.push(decideSlot({ now: minuteOfDay11(minute), nextDueAt }))
+  }
+  assert.ok(before.length > 300)
+  assert.ok(before.every((decision) => decision === 'wait'), 'every tick from 17:49 to 23:29 waits')
+
+  const at2330 = localTime(11, 11, 23, 30).getTime()
+  assert.strictEqual(decideSlot({ now: at2330, nextDueAt }), 'run')
+  // The tick re-arms before running, so the minutes spent inside the run cannot
+  // make the same slot fire again.
+  nextDueAt = nextSlotAfter(at2330, SCHEDULE_2330)
+  assert.strictEqual(nextDueAt, localTime(11, 12, 23, 30).getTime(), 're-armed to tomorrow')
+  assert.strictEqual(decideSlot({ now: localTime(11, 11, 23, 31).getTime(), nextDueAt }), 'wait', '23:31 must not run again')
+  assert.strictEqual(decideSlot({ now: localTime(11, 12, 23, 30).getTime(), nextDueAt }), 'run', 'the next evening is a new slot')
+})
+
+ok('schedule: a missed slot is skipped, not replayed', () => {
+  const missed = localTime(11, 11, 23, 30).getTime()
+  const now = localTime(11, 12, 9, 32).getTime()
+  assert.strictEqual(decideSlot({ now, nextDueAt: missed }), 'missed')
+  // What the tick does then: log the warning and re-arm from now.
+  const nextDueAt = nextSlotAfter(now, SCHEDULE_2330)
+  assert.strictEqual(nextDueAt, localTime(11, 12, 23, 30).getTime())
+  assert.strictEqual(decideSlot({ now, nextDueAt }), 'wait', 'the missed evening is not attempted again')
+})
+
+ok('schedule: an unusable schedule yields a missed slot instead of a silent skip', () => {
+  for (const scheduleMinutes of [NaN, undefined, Infinity, '23:30']) {
+    assert.ok(Number.isNaN(nextSlotAfter(localTime(11, 12, 9, 32).getTime(), scheduleMinutes)), `nextSlotAfter(${String(scheduleMinutes)})`)
+  }
+  const now = localTime(11, 12, 9, 32).getTime()
+  assert.strictEqual(decideSlot({ now, nextDueAt: NaN }), 'missed', 'an unusable cursor must be reported, not waited on forever')
+  assert.strictEqual(decideSlot({ now, nextDueAt: undefined }), 'missed')
+})
+
 ok('llm: a stalled stream times out instead of wedging the run', async () => {
   const { callLlm } = await import('../lib/digest.js')
   const stalled = {
@@ -1938,7 +2012,7 @@ ok('lessons: a rule never decays, never merges, and cannot be superseded', () =>
   assert.deepStrictEqual(assertAppendOnly(later.text, duplicate.text), [])
 })
 
-ok('lessons: five rules, then a sixth waits for approval instead of arming itself', () => {
+ok('lessons: the rule pool fills to its cap, then only a human can retire one', () => {
   let text = emptyLessons()
   const ruleTexts = [
     '删文件前先确认解析后的绝对路径',
@@ -1946,48 +2020,78 @@ ok('lessons: five rules, then a sixth waits for approval instead of arming itsel
     '发布前先看一遍 diff 里有没有密钥',
     '迁移数据前先量一下体积',
     '动权限之前先记下原始 ACL',
+    '覆盖文件前先确认目标路径',
+    '提交前先确认用户已经同意',
+    '打印凭据前先脱敏',
+    '删除分支前先确认不是默认分支',
+    '改动定时器前先看日志证据',
   ]
+  assert.strictEqual(ruleTexts.length, LESSON_LIMITS.rule, 'the fixture fills the pool exactly')
   for (const sentence of ruleTexts) {
     const added = addManualLesson(text, { section: 'rule', text: sentence, scope: '全局' }, { date: '2026-11-09' })
     assert.strictEqual(added.changed, true, added.error)
     text = added.text
   }
-  const sixth = addManualLesson(text, { section: 'rule', text: '覆盖文件前先确认目标路径', scope: '全局' }, { date: '2026-11-09' })
-  assert.strictEqual(sixth.changed, false)
-  assert.ok(sixth.error.includes('已满 5 条'))
+  const overflow = addManualLesson(text, { section: 'rule', text: '改 DNS 前先确认 TTL 已经到期', scope: '全局' }, { date: '2026-11-09' })
+  assert.strictEqual(overflow.changed, false)
+  assert.ok(overflow.error.includes(`已满 ${LESSON_LIMITS.rule} 条`))
 
   const proposal = applyLessonSuggestions(text, [
-    { section: 'rule', text: '发布前先看一眼 diff 里有没有密钥', scope: '全局' },
+    { section: 'rule', text: '发布前先看一遍 diff 里有没有密钥', scope: '全局' },
   ], { date: '2026-11-09' })
   assert.strictEqual(proposal.pending, 0, 'a duplicate of an existing rule is dropped, not staged')
   const fresh = applyLessonSuggestions(text, [
-    { section: 'rule', text: '删远程分支前先确认不是默认分支', scope: '全局' },
+    { section: 'rule', text: '改 DNS 前先确认 TTL 已经到期', scope: '全局' },
   ], { date: '2026-11-09' })
   assert.strictEqual(fresh.pending, 1, 'a new rule is parked, never armed')
   const active = parseLessons(fresh.text).get('rule').filter((entry) => entry.pending !== true)
-  assert.strictEqual(active.length, 5)
+  assert.strictEqual(active.length, LESSON_LIMITS.rule)
   const stats = lessonsStats(fresh.text)
-  assert.strictEqual(stats.counts.rule, 5)
+  assert.strictEqual(stats.counts.rule, LESSON_LIMITS.rule)
   assert.strictEqual(stats.pending, 1)
   const pendingEntry = parseLessons(fresh.text).get('rule').find((entry) => entry.pending === true)
   const approval = approveLesson(fresh.text, pendingEntry.id, { date: '2026-11-10' })
   assert.strictEqual(approval.changed, false, 'approval cannot exceed the cap')
-  assert.ok(approval.error.includes('已满 5 条'))
+  assert.ok(approval.error.includes(`已满 ${LESSON_LIMITS.rule} 条`))
 
-  // 时效经验 has the same cap: over it the lesson stays in the daily note.
+  // 时效经验 has the same shape of cap: over it the lesson stays in the daily note.
   let exp = emptyLessons()
-  for (const sentence of [
+  const expTexts = [
     '先看宿主版本再决定用哪个 API',
     'PowerShell 写 json 会带 BOM',
     '客户端 bundle 不消费 ui-settings',
     '日报的证据 token 要先规范化',
     '沙箱拒绝的路径先看 ACL',
-  ]) {
-    exp = addManualLesson(exp, { section: 'exp', text: sentence, scope: '全局' }, { date: '2026-11-09' }).text
+    '改完注入顺序要跑一遍预算测试',
+    '长会话要先算 token 再决定是否 fork',
+    'Windows 上命名管道会被沙箱拦截',
+    '迁移前先量一下画像文件的体积',
+    '冲突检测只看同主题的条目',
+    '面板数字要从同一个渲染函数取',
+    '备份文件按时间倒序列出',
+    '归因前先看进程的启动时间',
+    '端口变了要重新确认 GUI 地址',
+    '插件重载后先看 loaded 版本行',
+    '失败的运行不会自动重试',
+    '教训池满时新经验只留在日报',
+    '手动运行会写入 lastRunDay',
+    '时区按本地墙钟算定时点',
+    '槽位判断用严格大于避免重复触发',
+    '阈值线配置走 markline 字段',
+    'identity 块只从画像派生',
+    '身份块永远不进提示',
+    '稳定偏好分区最多显示三条',
+    '被钉住的条目不会被自动合并',
+  ]
+  assert.strictEqual(expTexts.length, LESSON_LIMITS.exp, 'the fixture fills the pool exactly')
+  for (const sentence of expTexts) {
+    const added = addManualLesson(exp, { section: 'exp', text: sentence, scope: '全局' }, { date: '2026-11-09' })
+    assert.strictEqual(added.changed, true, added.error)
+    exp = added.text
   }
-  const overflow = applyLessonSuggestions(exp, [{ section: 'exp', text: '第六条新经验：先看宿主版本号', scope: '全局' }], { date: '2026-11-09' })
-  assert.strictEqual(overflow.dropped, 1, 'over the cap the lesson stays in the daily note')
-  assert.strictEqual(parseLessons(overflow.text).get('exp').length, 5)
+  const expOverflow = applyLessonSuggestions(exp, [{ section: 'exp', text: '集群重启前先排空流量', scope: '全局' }], { date: '2026-11-09' })
+  assert.strictEqual(expOverflow.dropped, 1, 'over the cap the lesson stays in the daily note')
+  assert.strictEqual(parseLessons(expOverflow.text).get('exp').length, LESSON_LIMITS.exp)
 })
 
 ok('lessons: an unconfirmed experience expires into the archive with its reason', () => {

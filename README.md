@@ -32,8 +32,8 @@ Lessons answer a different question: **what went wrong last time, and which step
 
 | Section | Cap | Decay | Merge | Overturned by | Who adds/removes |
 |---|---|---|---|---|---|
-| 铁律 (rule) | 5 | never | never | never by the system | only a human; **a human must approve it** |
-| 时效经验 (exp) | 5 | no confirmation for 90 days → retired | same pit → merged (0.85) | can be disproved | the system may retire, a human may too |
+| 铁律 (rule) | 10 | never | never | never by the system | only a human; **a human must approve it** |
+| 时效经验 (exp) | 25 | no confirmation for 90 days → retired | same pit → merged (0.85) | can be disproved | the system may retire, a human may too |
 | 已作废 (archive) | unlimited | — | — | — | appended only, kept for reading |
 
 **Append-only and invalidate-only, never rewrite.** The system never rewrites the sentence of an existing entry: new rows are appended, a row that stops holding moves to 已作废 with its original text and a reason. Every write compares each pre-existing entry (id, sentence, scope, anchor) before and after — if any of them changed, the write is refused. That is an assertion in the code, not a convention in the docs. A human **replace** is the only rewrite path: it must be clicked on the settings page, the old wording still goes to 已作废, and the new one is appended.
@@ -183,7 +183,8 @@ Every non-loopback request is rejected with 403; wrong methods get 405.
 
 ## Limits
 
-- Requires the host process to be running at the scheduled time; missed days are caught up once on the next start.
+- Requires the host process to be running at the scheduled time. A slot that passes while nothing is watching is **not** replayed: the next start re-arms the next future slot and the missed one leaves a single warning line in `logs/run-<day>.jsonl`. A run that starts on time and then fails is not retried either — the failure stays in the log and in `lastError`.
+- The pool caps (10 rules / 25 experiences) bound what lives in `lessons.md`, not what reaches the prompt: the lessons layer is still cut to its share of the character budget, and the settings page reports how many rows that left out. A bigger pool keeps a lesson out of the daily note instead of dropping it.
 - Model output must be JSON; parsing tolerates prose/fences but a bad generation only degrades that stage (the other stages still write).
 - **Scope v1 only trusts a cwd the host hands over**: it is not confirmed that the host rebuilds the prompt every turn, so `buildSectionText` takes `cwd` from the context when present and otherwise the host process cwd. Global lessons therefore always inject; a workspace lesson injects only when the host process runs in that workspace. Keyword and file-type matching are deliberately not implemented — a missed lesson beats a wrongly applied one.
 - Conflict detection is a mechanical scan (same scope + opposite polarity + text similarity ≥ 0.4), not semantic understanding: it catches clear opposites and can miss indirect phrasing. A false mark deletes nothing.

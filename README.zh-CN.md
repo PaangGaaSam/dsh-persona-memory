@@ -175,7 +175,7 @@ $DSH_HOME/persona-memory/
 | `POST /persona-memory/rollback` | `{ doc, name }` —— 恢复某份备份 |
 | `POST /persona-memory/identity/refresh` | 按当前画像重算身份块（**唯一的身份块写入口**，没有写 text 的接口） |
 | `POST /persona-memory/lessons/add` | `{ text, section, scope }` —— 人工新增一条教训 |
-| `POST /persona-memory/lessons/approve` | `{ id }` —— 批准一条待确认铁律（满了 5 条会拒绝） |
+| `POST /persona-memory/lessons/approve` | `{ id }` —— 批准一条待确认铁律（满了 10 条会拒绝） |
 | `POST /persona-memory/lessons/reject` | `{ id, reason }` —— 作废，**原因必填**，原文进「已作废」 |
 | `POST /persona-memory/lessons/replace` | `{ id, text }` —— 只对铁律；旧写法进「已作废」，新写法追加 |
 
@@ -183,7 +183,8 @@ $DSH_HOME/persona-memory/
 
 ## 限制
 
-- 定时时刻需要宿主进程在跑；错过的那天会在下次启动时补跑一次。
+- 定时时刻需要宿主进程在跑。错过的那一次**不回跑**：下次启动只把游标移到下一个未来时刻，错过的那次在 `logs/run-<day>.jsonl` 里留一条 warning。准点触发但跑失败的也不会重试，失败留在日志和 `lastError` 里。
+- 池子上限（铁律 10 / 时效经验 25）限制的是 `lessons.md` 里**装多少条**，不是提示词里**读多少条**：教训层仍按字符预算截断，设置页会显示有多少条因预算没进提示。池子变大等于新经验不再掉进日报，而不是每条都会进提示。
 - 模型输出必须是 JSON；解析容忍散文和代码围栏，但某一段生成失败只降级那一段（其余段照常写入）。
 - **作用域 v1 只认宿主给的 cwd**：宿主目前没有确认「每轮重建提示词」，所以 `buildSectionText` 先取上下文里的 `cwd`，取不到就用宿主进程的 cwd。结果是**全局教训总会注入**，工作区教训只有在宿主进程就跑在那个工作区时才注入。关键词 / 文件类型匹配留空不实现 —— 宁漏勿滥。
 - 教训的冲突检测是机械扫描（同作用域 + 极性相反 + 文本相似度 ≥ 0.4），不是语义理解：它会把明显相反的标出来，也可能漏掉绕了一圈的表达。标错不会删任何东西。
