@@ -77,8 +77,11 @@ Self-accounts land in **还没想清楚的** first; the plugin then moves entrie
 
 Two rules keep it honest:
 
+- **Reaffirm** — every round the model first compares today's self to the existing rows: the same phenomenon showing up again is named with `entry_id: "<id>"`, `text` copies that row verbatim and `evidence` carries only today's new proof. The code merges by id, so a reworded sentence cannot open another candidate. Without this, each rewrite looked like a new phenomenon and the evidence stayed at one session — the threshold was never reached.
 - **Supersede** — when a new self-account contradicts a settled entry the model names it (`supersedes: "<id>"`); that entry's confidence drops by 0.3 and it returns to candidates instead of coexisting with its opposite. Taking yourself back is encouraged: if last time's reasoning no longer holds, say why.
 - **Decay** — an entry without new evidence for `personaDemoteAfterDays` (default 30) steps back to candidates. Nothing is deleted; pinned entries never move.
+
+Every row in `## 我的判断` also carries a category: `mistake` (I got it wrong, almost did, or changed course after being corrected), `stance` (my judgment about a specific thing — the default) and `revise` (I used to think X, now I think Y). Only `mistake` can grow a reusable behavioural entry, so the daily note sorts it ahead of the 12-row cap and the persona stage looks at it first — being right about "what this thing is" can never repeat into a behaviour.
 
 `persona.md` has **no user-locked section**: identity is not something the user defines. Rules the user dictates belong to the profile (手动锁定 / 雷区), are injected separately, and never mix into the self-account. A leftover `## 用户固定规则` heading in an older document is ignored — not deleted, just no longer read or written.
 

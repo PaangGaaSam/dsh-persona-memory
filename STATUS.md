@@ -1,7 +1,7 @@
 # dsh-persona-memory — 项目状态（交接用）
 
-> 更新时间：**2026-11-12 12:45**。当前代码：**0.3.5**（`node test/run.mjs` → **79 项全过**）。日志显示进程 10:17 加载了 **v0.3.4**、12:10 加载了 **v0.3.5**（`facts_search` 已经出现在会话工具列表里，说明后端事实层在跑）；但这一轮 review 的修复、设置页「事实」卡片和文档都是 12:10 之后才改的，**还要再重启一次**，面板另需刷新页面。
-> compact 后先读 **§0 → §1 → §26（事实层）→ §25（定时器与池子上限）→ §22（教训层）→ §21（折叠统一）→ §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§26 是之后发生的事。
+> 更新时间：**2026-11-12 17:10**。当前代码：**0.3.7**（`node test/run.mjs` → **92 项全过**）。运行中的进程是 13:22 加载的 **v0.3.5**：0.3.6（性格重申）与 0.3.7（判断类别 + id 单调递增）**都没提交、没加载**，要用必须重启桌面端，并先等用户确认提交。
+> compact 后先读 **§28（判断类别）→ §27（性格重申）→ §0 → §1 → §26（事实层）→ §25（定时器与池子上限）→ §22（教训层）→ §21 → §20 → §19 → §18 → §17 → §16**。§2–§11 是 0.2.1 时的基线（数字会旧，结论仍有效），§12–§28 是之后发生的事。
 
 ---
 
@@ -14,10 +14,13 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 - **0.3.3（2026-11-12）**：定时触发换成单一内存游标 `nextDueAt` —— 到点执行、**错过不回跑**、错过只留一条 `warn`（旧逻辑按「今天跑过没有」判断，17:00 跑过一次就把 23:30 吃掉，且什么都不记）。已重启生效：`logs/run-2026-11-12.jsonl` 里 10:02 的 `loaded: v0.3.3`。
 - **0.3.4（2026-11-12）**：教训池 `LESSON_LIMITS` 5/5 → **10/25**（注入预算不变），面板新增「另有 N 条因提示预算未注入」（`injected.budgetSkipped`）。已重启生效：日志 10:17 的 `loaded: v0.3.4`。
 - **0.3.5（2026-11-12）**：新增**事实层**（§26）：`facts.md` + `facts_search` 工具 + 设置页「事实」卡片 + 三条人写路由（`facts/add | archive | confirm`）。**不进提示词**，按需检索；v1 故意不注册模型可调用的写工具。测试 69 → 79。日志 12:10 已加载 `v0.3.5`（工具已在会话里），但本轮的 review 修复与面板卡片在其后，**仍需再重启**。
+- **0.3.6（2026-11-12）**：修「性格永远攒不到晋升门槛」（§27）：提取层新增 entry_id 显式重申，合并层按 id 直接命中（不再只看相似度），提示词要求先对照现有条目。测试 79 → 85。**未提交、未加载**，等用户确认。
+- **0.3.7（2026-11-12）**：让「我的判断」能产出可复用的行为条目（§28）：stage-1 的 self 加 kind（mistake/stance/revise），日报判断区带 [kind] 标签且 mistake 排在 12 条上限之前，persona 提示词把 mistake 排最前；entryId 改成「最大号 + 1」，id 不再回收小号。测试 85 → 92。**未提交、未加载**。
+
 
 - 包：`D:\dsh-persona-memory`；profile `desktop` 以 `link:` 安装（`dsh.profile.bundles` 含 `dsh-persona-memory`）。
-- 版本 **0.3.5**（0.2.1 → … → 0.3.5，跨 11-10 / 11-12）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
-- 测试：`node test/run.mjs` → **79 项全过**；`node --check lib/*.js` 全过。
+- 版本 **0.3.7**（0.2.1 → … → 0.3.7，跨 11-10 / 11-12）。**改完代码必须重启桌面端**，然后 `GET /persona-memory/status` 看 `status.version` 是否已变。
+- 测试：`node test/run.mjs` → **92 项全过**；`node --check lib/*.js` 全过。
 - **0.3.0 新增教训层**（§22）：`lessons.md` + 日报 `## 可疑雷点` + 设置页「教训」卡片 + 注入顺序/预算改版。第一次跑完日更才会出现 `lessons.md`。
 - 0.2.5 已实测：6 个会话 → 18 条 self notes，日报的 `## 我的判断` 正常落盘；但**自述合并失败**（`persona: no JSON object`），已在 0.2.6 修（见 §18）。
 - **0.2.6 已实测通过**（18:16–18:26 那轮）：6 会话 → `persona: +5 ~0 ↑0 ↓0 x0 (v3)`，第一次解析就成功、没走重试；日报证据变成 `2026-11-10/session-7b3c4fb6` 等**5 个不同会话**；`persona.md` 出现 5 条第一人称自述。
@@ -47,10 +50,10 @@ DeepSeek Harness 插件：每天 17:00 跨工作区汇总会话 → 写日报 �
 | `lib/index.js` | 插件入口 | `apply()` 注册 7 个工具（含只读的 `facts_search`）、注入段、HTTP 路由、60s 定时器 + 45s 启动 tick（判定走 `lib/schedule.js`）；`config` 是 `let`，设置页改完即时生效；`runOnce()` 负责锁/状态/记录 |
 | `lib/schedule.js` | 定时判定（纯函数） | `SLOT_GRACE_MS`（10 分钟宽限）、`nextSlotAfter(from, minutes)`（严格晚于 from 的本地墙钟点）、`decideSlot` → `wait`/`run`/`missed`；游标只在内存，错过不回跑（§25） |
 | `lib/config.js` | 配置 | `DEFAULTS`、`EDITABLE_KEYS`、`resolveConfig`（校验 + scheduleMinutes）、`composeConfig`（DEFAULTS → 补丁行 → config.json）、`loadOverrides`/`saveOverrides`、`publicConfig` |
-| `lib/digest.js` | 三段 LLM 管线 | stage1 每会话一卡（`cites` 引用消息号、`lessons` 候选）、stage2 日报（含 `lessons` → `## 可疑雷点`）、stage3 画像建议、`personaStage`（读近 N 天日报 + 当日卡片）、`lessonsStage`（候选 + 后果信号 + 已有教训原文，**不读 persona.md**）；`callLlm` 带超时；`parseDailyObservations`/`parseDailyLessons`/`detectConsequenceSignals` |
+| `lib/digest.js` | 三段 LLM 管线 | stage1 每会话一卡（`cites` 引用消息号、`lessons` 候选）、stage2 日报（含 `lessons` → `## 可疑雷点`）、stage3 画像建议、`personaStage`（读近 N 天日报 + 当日卡片；`personaPrompt` 单独列出「现有条目」id 供重申；不读 persona.md 之外的东西）、`lessonsStage`（候选 + 后果信号 + 已有教训原文，**不读 persona.md**）；`callLlm` 带超时；`parseDailyObservations`/`parseDailyLessons`/`detectConsequenceSignals`；`parsePersonaSuggestions` 透传 `entry_id` |
 | `lib/lessons.js` | 教训文档（操作层） | `parseLessons`/`assertAppendOnly`；行级手术 `appendLesson`/`archiveLesson`/`approveLesson`/`replaceLesson`；`applyLessonSuggestions`（上限 10/25、exp 合并 0.85、90 天作废、铁律转待确认）；`conflictPairs`（同 scope + 极性相反 + 相似度 ≥0.4）；`renderLessonsInjection`；`consecutiveEmptyDays` |
 | `lib/facts.js` | 事实文档（按需检索层） | `parseFacts`/`assertFactsAppendOnly`；`addManualFact`/`archiveFact`/`confirmFact`（全走 append-only 断言，作废必填原因）；`[验证]`/`[回注]` 是缩进续行；`searchFacts`（全局 + 本机 + 当前 cwd，命中不到就说没记录）；`describeFacts`（180 天标「可能过期」，不删除）；**没有注入渲染函数**（§26） |
-| `lib/profile.js` | 文档解析/合并 | `parseProfile`/`serialize`/`readMeta`；证据 `parseEvidence`/`formatEvidence`/`evidenceStats`；`applySuggestions`（画像）；`applyPersonaSuggestions`（性格升降级 + supersedes + 衰减）；三段注入渲染的逐行预算判断都按「拼接后的真实长度」算，不再多扣 1 字符 |
+| `lib/profile.js` | 文档解析/合并 | `parseProfile`/`serialize`/`readMeta`；证据 `parseEvidence`/`formatEvidence`/`evidenceStats`；`applySuggestions`（画像）；`applyPersonaSuggestions`（性格升降级 + supersedes + 衰减 + **按 `entry_id` 直接重申**，锁定条目不碰）；三段注入渲染的逐行预算判断都按「拼接后的真实长度」算，不再多扣 1 字符 |
 | `lib/report.js` | 运行摘要文案（纯函数） | `formatReport(report, opts)` 生成工具返回与面板横幅共用的那段文字；教训输出被截断时追加「本次输出被截断，只收下 N 条」，且不再同时说「没有新的可写条目」 |
 | `lib/history.js` | 备份与回滚 | `backupDocument`、`listHistory`、`restoreHistory`（回滚前先备份当前，可逆；文件名正则校验防穿越）；`HISTORY_DOCS = profile/persona/lessons/facts` |
 | `lib/http.js` | 回环路由 | `registerRoutes`（16 条，含 4 条 `lessons/*`、3 条 `facts/*`）、`readJsonBody`（128KB 上限）、`describeDocument`/`describeLessons`/`documentsPayload`；全部仅回环，方法不符 405 |
@@ -716,3 +719,92 @@ DSH 进程 17:49 启动后整夜未重启（PID 仍在），系统日志无睡�
 - 检索是关键词匹配，不是语义检索：换个说法可能搜不到；宁漏勿错。
 - 检索结果会作为工具结果进入本次对话，因此下一次日更会读到它（stage-1 已禁止把系统技术结论写进 `self`，`isSystemFactObservation` 再把系统类事实挡在画像外）。
 - `[回注]` 只存不用（v1）；日更自动提取事实留到下一阶段。
+
+### 阶段二（待办，用户已定先后）
+
+1. **注入兼容**：事实层现在只走 `facts_search`；阶段二允许一小段常驻索引（或对高频条目做 keyword 预取），与工具式并存。用户原话：「往后我认为需要两者兼有」。
+2. **模型可写**：允许助手写事实，但只能进「待确认」，人点确认才生效——与铁律的 staging 同一套机制。用户原话：「往后也需要你也能写」。
+3. **日更自动提取**：从日报里抽「环境/项目事实」，必须带锚点；先做影子模式（只记录不写库）观察一周再决定是否放开。
+4. 顺序建议：先 3 的观察、再 2、最后 1；1 会占提示预算，等前两项稳定再加。
+## 27. v0.3.6 —— 性格永远攒不到晋升门槛（提取层从不重申已有候选）
+
+### 现象
+
+`persona.md` v4，最后合并 2026-11-10。5 条候选（cand-8..cand-12）全部来自 11-10，每条只有 1–2 个会话、1 个日期；「我认为我是谁」「我和你相处时的样子」两个区全空，注入 0 条。11-11 和 11-12 的日报各有 13 条「我的判断」，但没有一条在重申那 5 条。
+
+### 根因
+
+晋升门槛（3 会话 / 3 日期）没问题，问题在**提取环节从不重申**：
+
+1. `PERSONA_SYSTEM` 只规定了「相反才 supersedes」，没规定「同一条要重申」。
+2. 合并靠相似度 ≥ 0.85 判同一条，而模型每轮都换措辞 → 每次都被当成新现象 → 新开候选 → 证据永远停在 1–2 会话、1 天。
+
+### 改法
+
+| 位置 | 改动 |
+|---|---|
+| `lib/digest.js` `parsePersonaSuggestions` | `add` 条目新增可选 `entry_id`（字符串，如 `"cand-10"`），原样透传给合并层；其它字段不变 |
+| `lib/profile.js` `applyPersonaSuggestions` | 相似度匹配**之前**先按 `entry_id` 在 `PERSONA_MOVABLE`（core/style/candidate）里找同一个条目；命中且不是 pinned/userLocked → 直接走原有合并分支（追加证据、`confidence = min(1, max(old,new)+0.02)`、`lastVerified` 取证据里最新日期），再用 `personaSectionFor` 重新裁决升降并 `moveEntry`。命中不到或条目锁定 → **回落到相似度路径**，不报错、不碰锁定条目。命中但文本相似度 < 0.4 → 记一行 `persona: affirm <id> (similarity 0.12)`（唯一能发现「模型乱认领」的信号） |
+| `lib/digest.js` `PERSONA_SYSTEM` | 加两条：先逐条对照现有条目、同一现象就**重申**（`entry_id` + 逐字原文 + 今天的新证据）；不许为了凑证据把不同现象塞进同一条。JSON 形状加 `entry_id` |
+| `lib/digest.js` `personaPrompt`（从 `personaStage` 里抽出来的纯函数，导出以便测试） | user prompt 增加「现有条目（重申时 entry_id 用这些 id，text 逐字照抄）」小节，最多 20 条（id + 原文）。`当前性格` 只剩 3000 字符，底部的条目可能被截掉，所以要单独列 id |
+
+门槛、相似度阈值、默认值一律没动。
+
+### 测试（79 → 85）
+
+1. 同一现象换措辞 + `entry_id` → 条目数不变、证据增加、`lastVerified` 前进、原句一字不改；`log` 收到 `persona: affirm cand-1 (similarity 0.00)`。
+2. 三次重申（3 会话 2 日期 → style；第 3 个日期 → core）：`promoted` 各为 1，条目 id 不变，区从 candidate → style → core。
+3. `entry_id: "cand-999"`（不存在）→ 回落到相似度：同句仍合并，不同句仍新开候选。
+4. `entry_id` 指向 pinned 条目 → 不合并、原文与证据都不动，走相似度路径新开候选。
+5. 不带 `entry_id` 的不同现象 → 新开候选（不误合并）。
+6. `PERSONA_SYSTEM` 含「重申」「entry_id」「逐字原文」且 JSON 形状已带 `entry_id`；`personaPrompt` 含「现有条目」小节并列出真实 id（`- cand-1 / …`）。
+
+### 验收（待执行，需先重启）
+
+重启后强制合并一次（设置页「强制合并性格」或 `persona_digest(force_persona=true)`），看日志的 `persona: +N ~N ↑N ↓N xN (vN)`：
+
+- 期待：`~N` 里包含对 cand-8..cand-12 的重申（证据变 2–3 会话、日期前进），部分条目晋级到「和你相处时的样子」。
+- 若模型仍不重申（cand 原封不动）：说明提示词没被遵守，**贴 `persona raw` 日志继续调提示词**，不要调相似度阈值。
+
+### 已知限制
+
+- `entry_id` 是模型的自述，代码只校验「这个 id 存在且没锁」；认错行只能靠 `affirm ... (similarity 0.xx)` 那行日志发现（< 0.4 才记）。
+- `现有条目` 只列 20 条：候选超过 20 条时，排在后面的条目模型看不到 id，又只能新开。
+## 28. v0.3.7 —— 「我的判断」产出可复用行为条目 + persona id 不复用小号
+
+### 现象（2026-11-12 实测）
+
+凌晨那次合并：`persona: 5 suggestions, +5 ~0 ↑0 (v5)` —— 一条都没重申。查了原因，不是 0.3.6 的 `entry_id` 坏了，而是**没有输入可用**：当天日报 12 条「我的判断」全是「这件事我怎么判断」（锁屏可见性、注释与源码不符、某个词的含义、插件可行性、表情包渲染层），没有一条是「我这类行为又犯了」。同一天教训层却抽出了「把故障归因于用户操作前，先查证据」这种可复用的行为模式 —— 差别在 stage-1 的取向：教训一边问「我下次该怎么做」，self 一边只问「我怎么判断」。
+
+### 改法
+
+| 位置 | 改动 |
+|---|---|
+| `lib/digest.js` `STAGE1_SYSTEM` | self 每条加 `kind`：`mistake`（做错/差点做错/被纠正后改做法）/ `stance`（对具体事的判断，默认）/ `revise`（原来那样想，现在改）。mistake 必须四件事齐全（他要求/期待什么、我做了什么、结果或后果、我以后怎么做）；**每场最多 1 条**，明确允许「这场没有 mistake」；同一类失误以前出现过时，judgment 里直说「这类我以前也犯过」（不写 id）。输出形状加 `kind` |
+| `parseCard` | self 保留 `kind`，白名单校验，非法/缺失一律 `stance`（不丢整条） |
+| `renderDaily` | 「我的判断」行首 `- [mistake] 事件 → 判断（证据：…）`；**先排序再截 12 条**，mistake 排最前（组内保持原顺序），否则行为条目会被上限切掉 |
+| `parseDailyObservations` | 判断区解析可选 `[kind]` 前缀并带回 `kind`；旧文件没有前缀按 `stance` 读；行上另带 `self: true`，和观察区的 `[preference/style/…]` 区分开（`kind` 不再承担「这是不是自述」的语义，persona 阶段改判 `row.self === true`） |
+| `personaStage` / `personaPrompt` | notes 带 `kind`；拼提示词时 mistake 类排最前（组内保持时间顺序），JSON 里就有 `kind`；`PERSONA_SYSTEM` 加一句：mistake 先对照现有条目，同现象用 `entry_id` 重申、逐字照抄、补今天的证据 |
+| `lib/profile.js` `entryId` | 改成「该区已有最大号 + 1」，不再取最小空闲号（原来在 cand-8..12 之上会发 cand-1、cand-2，面板和日志混排）。条目在文档里只会换区、不会被删，所以最大值不会回落 |
+
+晋升门槛、相似度阈值、注入都没动。
+
+### 测试（85 → 92）
+
+1. `parseCard`：mistake / revise 保留，`"error"` 与缺失 → stance，且整条不丢。
+2. `STAGE1_SYSTEM`：三种类别、「最多 1 条 mistake」、「可以没有 mistake」、「他要求/期待什么」、JSON 形状带 `kind`。
+3. 日报往返：`[mistake]` / `[stance]` 写进去读回来还是那个 kind；旧格式（无标签）读回 `stance`；观察区的 `[preference]` 不会被读成自述。
+4. 12 条上限：13 条里最后 2 条是 mistake → 落盘后两条都在、被切掉的是最后那条 stance。
+5. `personaPrompt`：mistake 排在 stance 前、含「mistake 类排在最前」、重复调用结果稳定；`PERSONA_SYSTEM` 提到 mistake 与「做错/被纠正」。
+6. `entryId`：cand-8..12 之上新增两条 → cand-13、cand-14；删掉 cand-13 再加 → cand-15。
+7. 回归：只有 stance 的一天照常落盘、读回、进 persona 输入。
+
+### 验收
+
+- 今晚 23:30 的自然运行会重跑 stage-1：日报「我的判断」应出现 `[mistake]` 标签；跑完把前三行贴出来并说明几条 mistake。
+- 下一次 persona 合并（11-19）之前如果 mistake 仍为 0，贴 stage-1 的 raw 日志，判断是"模型不写"还是"提示词没说清"，再调提示词而不是调阈值。
+
+### 已知限制
+
+- 「四件事齐全」和「每场最多 1 条」都是提示词约束，代码只做白名单与排序；模型多写几条 mistake 不会被丢，只会都落盘。
+- id 的单调性建立在「条目不会被删」上：手改 `persona.md` 删掉最大号那条，下一次会重新用回那个号。

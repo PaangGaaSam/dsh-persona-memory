@@ -1,6 +1,6 @@
 {
   "name": "dsh-persona-memory",
-  "version": "0.3.5",
+  "version": "0.3.7",
   "description": "Daily cross-workspace session digest that grows a user profile, a companion personality and an append-only lessons list, then injects all three into every prompt.",
   "type": "module",
   "main": "lib/index.js",
