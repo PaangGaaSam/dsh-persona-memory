@@ -173,6 +173,31 @@ dsh plugin add github:PaangGaaSam/dsh-persona-memory
 - 运行摘要和页面横幅都会写明「本次输出被截断，只收下 N 条」，而不是显示成「没有新的可写条目」。
 - `{"add":[]}` 仍然是合法答案（今天确实没有可写的），不报警。
 
+## 斜杠命令
+
+三条命令在宿主的命令面板里，只有宿主装配了 `commands` 插件时才注册（没装也不影响记忆本身）：
+
+| 命令 | 作用 |
+|---|---|
+| `/new` | 预览一次重置会删什么（逐个路径给出文件数与字节数）。`/new confirm` 会**先**把全部记忆快照到 `backups/reset-<时间戳>/`，再删掉 |
+| `/backup` | 立刻把全部记忆快照到 `backups/backup-<时间戳>/` |
+| `/reload` | 用最新的 `backup-*` / `reset-*` 快照恢复；`/reload <目录名>` 指定一份（`safety-*` 也能指定） |
+
+**哪些算记忆** —— 也就是这三条命令会动的范围：
+
+- 清空 / 快照 / 恢复：`profile.md`、`persona.md`、`lessons.md`、`facts.md`、`identity.json`、`state.json`，以及 `daily/`、`history/`、`logs/` 三个目录。
+- 永远不动：`config.json`（调度、模型、预算）与 `backups/`（快照本身）。正是这条排除让重置可以撤销。
+
+用的时候值得知道的几点：
+
+- 不带参数的 `/new` **只预览**：只读地 stat 每一项并打印大小，一个字节都不写（连 mtime 都不变）。
+- `/new confirm` 只在快照完整之后才删；快照失败就中止，记忆文件一个不少。回复里给出快照目录，空的 `daily/`、`history/`、`logs/` 会保留，下一次日更照常写盘；`state.json` 重建为空状态（调度游标在内存里，不受影响）。
+- **两种恢复语义**：`backup-*` / `reset-*` 是**覆盖**——快照里有的文件盖回去，当前多出来的文件保留并在回复里列出；`safety-*` 是**镜像**——它是「恢复前那一刻」的完整状态，恢复时会删掉快照里没有的文件。所以 `想撤销这次恢复：/reload safety-…` 是真的退得回去；只有覆盖语义时它退不干净，删不掉上一轮恢复新增的文件。
+- **命令面板里的描述是中文**：宿主的命令 schema 只接受一个纯字符串、没有 locale 字段，所以没有英文版；参数 token 仍是英文（`confirm`、快照目录名）。
+- `/reload` 写第一个字节之前会先拍一份 `safety-*` 快照，所以这次恢复本身也能用 `/reload safety-<时间戳>` 撤销。
+- 时间戳用本地时间 `yyyyMMdd-HHmmss`；同一秒的两份快照补 `-2`、`-3`。
+- 三条命令在摘要运行期间都会拒绝执行。
+
 ## 工具
 
 | 工具 | 用途 |
@@ -197,6 +222,7 @@ $DSH_HOME/persona-memory/
 ├── config.json           # 设置页覆盖项（可选）
 ├── daily/YYYY-MM-DD.md   # 日报：今日摘要 / 观察 / 我的判断 / 可疑雷点 / 延续待办
 ├── history/              # 每次改写前的备份：profile-<日期>-<毫秒>.md（persona / lessons / facts 同理）
+├── backups/              # /backup、/new、/reload 的快照：backup-<时间戳>/ reset-<时间戳>/ safety-<时间戳>/
 ├── state.json            # 调度状态
 └── logs/run-YYYY-MM-DD.jsonl
 ```

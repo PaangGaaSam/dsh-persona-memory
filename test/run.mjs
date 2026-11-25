@@ -47,8 +47,10 @@ import {
 import { extractJson, extractJsonReport, lessonsStage, parseCard, parseDaily, parseDailyObservations, parseLessonSuggestions, parsePersonaSuggestions, parseSuggestions, personaPrompt, PERSONA_SYSTEM, readRecentDailyObservations, renderDaily, runDigest, sessionKey, evidenceFromCites, detectConsequenceSignals, STAGE1_SYSTEM } from '../lib/digest.js'
 import { addManualFact, archiveFact, assertFactsAppendOnly, confirmFact, describeFacts, emptyFacts, FACT_STALE_DAYS, parseFacts, searchFacts } from '../lib/facts.js'
 import { formatReport } from '../lib/report.js'
+import { latestSnapshot, listSnapshots, previewReset, restoreSnapshot, snapshotMemory } from '../lib/reset.js'
 import { PERSONA_HEADING, buildSectionText, planBudget, renderLayers } from '../lib/inject.js'
 import { decideSlot, nextSlotAfter } from '../lib/schedule.js'
+import { runSlash, SLASH_COMMANDS } from '../lib/slash.js'
 import { normalizeTimeText, parseTimeOfDay, resolveDshHome } from '../lib/util.js'
 
 let passed = 0
@@ -2014,7 +2016,11 @@ ok('persona: the prompt shows mistake notes first and says what a mistake needs'
     { day: '2026-11-12', kind: 'stance', event: '他问归属', judgment: '我认为这是框架层的事', confidence: 0.5, evidence: '' },
     { day: '2026-11-12', kind: 'mistake', event: '他要求先验证', judgment: '我直接重启了，白等一轮，以后先跑测试', confidence: 0.7, evidence: '2026-11-12/session-aaaa1111' },
   ]
-  const make = () => personaPrompt({ date: '2026-11-12', window: 7, notes, background: [], personaText: emptyProfile(PERSONA_SECTIONS, '助手性格') })
+  // `emptyProfile` stamps `updatedAt` with the current time, so it must be built
+  // once: rebuilding it inside `make()` makes the two calls differ by a
+  // millisecond and the stability check flake.
+  const personaText = emptyProfile(PERSONA_SECTIONS, '助手性格')
+  const make = () => personaPrompt({ date: '2026-11-12', window: 7, notes, background: [], personaText })
   const prompt = make()
   assert.ok(prompt.indexOf('"kind": "mistake"') >= 0)
   assert.ok(prompt.indexOf('"kind": "mistake"') < prompt.indexOf('"kind": "stance"'), 'mistake rows come first')
@@ -2969,6 +2975,252 @@ ok('facts: a miss says so even when every fact belongs to another workspace', ()
   assert.strictEqual(result.hits, 0)
   assert.strictEqual(result.skipped, 1)
   assert.ok(result.text.includes('不要据此推测'), 'an out-of-scope miss is still an answer, not a guess')
+})
+
+// ---------------------------------------------------------------------------
+// Slash commands: /new, /backup, /reload (lib/reset.js + lib/slash.js)
+// ---------------------------------------------------------------------------
+
+/** Write a fixture tree: `{ 'daily/2026-11-10.md': 'text' }`. */
+function writeTree(root, files) {
+  for (const [rel, text] of Object.entries(files)) {
+    const file = path.join(root, rel)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, text, 'utf8')
+  }
+}
+
+/** Every path under `root` with its size and mtime, to prove a call changed nothing. */
+function treeState(root) {
+  const state = {}
+  const walk = (dir) => {
+    for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, dirent.name)
+      const rel = path.relative(root, abs).split(path.sep).join('/')
+      if (dirent.isDirectory()) {
+        state[`${rel}/`] = 'dir'
+        walk(abs)
+        continue
+      }
+      const stat = fs.statSync(abs)
+      state[rel] = `${stat.size}:${stat.mtimeMs}`
+    }
+  }
+  walk(root)
+  return state
+}
+
+const memoryFixture = {
+  'profile.md': '# 用户画像\n',
+  'lessons.md': '# 教训\n',
+  'facts.md': '# 事实\n',
+  'identity.json': '{"profileVersion":"abc"}\n',
+  'state.json': '{"lastRunDay":"2026-11-12","lastRunAt":1,"runs":[{"ok":true}]}\n',
+  'daily/2026-11-10.md': 'note 1\n',
+  'daily/2026-11-12.md': 'note 2\n',
+  'history/profile-2026-11-10-1.md': 'old profile\n',
+  'logs/run-2026-11-12.jsonl': '{"message":"x"}\n',
+  'config.json': '{"schedule":"23:30"}\n',
+}
+
+ok('reset: the preview reports every entry and byte without touching anything', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(root, memoryFixture)
+  const before = treeState(root)
+  const preview = previewReset({ root })
+  assert.deepStrictEqual(treeState(root), before, 'a preview is read-only')
+  const profile = preview.entries.find((entry) => entry.rel === 'profile.md')
+  assert.strictEqual(profile.type, 'file')
+  assert.strictEqual(profile.bytes, Buffer.byteLength('# 用户画像\n', 'utf8'))
+  const daily = preview.entries.find((entry) => entry.rel === 'daily')
+  assert.strictEqual(daily.type, 'dir')
+  assert.strictEqual(daily.files, 2)
+  assert.strictEqual(daily.bytes, Buffer.byteLength('note 1\nnote 2\n', 'utf8'))
+  assert.strictEqual(preview.files, 9, 'profile, lessons, facts, identity, state, 2 daily, 1 log, 1 history')
+  assert.ok(!preview.entries.some((entry) => entry.rel === 'config.json'), 'config.json is not memory')
+  assert.ok(!preview.entries.some((entry) => entry.rel === 'backups'), 'snapshots are not memory')
+})
+
+ok('reset: /new confirm snapshots first, then clears and keeps config.json', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(root, memoryFixture)
+  const now = new Date(2026, 10, 13, 17, 7, 26)
+  const result = runSlash({ root }, 'new', ' confirm ', { now })
+  assert.strictEqual(result.kind, 'success', result.text)
+  assert.ok(result.text.includes('reset-20261113-170726'), result.text)
+  const snapshotDir = path.join(root, 'backups', 'reset-20261113-170726')
+  assert.ok(fs.existsSync(path.join(snapshotDir, 'profile.md')), 'the snapshot has the profile')
+  assert.ok(fs.existsSync(path.join(snapshotDir, 'history', 'profile-2026-11-10-1.md')), 'and history')
+  assert.ok(fs.existsSync(path.join(snapshotDir, 'logs', 'run-2026-11-12.jsonl')), 'and logs')
+  for (const rel of ['profile.md', 'lessons.md', 'facts.md', 'identity.json']) {
+    assert.ok(!fs.existsSync(path.join(root, rel)), `${rel} is gone`)
+  }
+  for (const rel of ['daily', 'history', 'logs']) {
+    assert.ok(fs.statSync(path.join(root, rel)).isDirectory(), `${rel}/ survives so the next run can write`)
+  }
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8')), { schedule: '23:30' })
+  const state = JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8'))
+  assert.strictEqual(state.lastRunDay, '')
+  assert.strictEqual(state.lastRunAt, 0)
+  assert.deepStrictEqual(state.runs, [])
+})
+
+ok('reset: a failed snapshot deletes nothing and says why', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(root, memoryFixture)
+  // A regular file where `backups/` must be. The directory read-only bit is
+  // ignored by Windows, so a file at that path is the portable way to make the
+  // snapshot fail before anything is removed.
+  fs.writeFileSync(path.join(root, 'backups'), 'not a directory', 'utf8')
+  const before = treeState(root)
+  const result = runSlash({ root }, 'new', 'confirm')
+  assert.strictEqual(result.kind, 'error', result.text)
+  assert.ok(result.text.includes('快照失败'), result.text)
+  assert.deepStrictEqual(treeState(root), before, 'nothing was deleted')
+})
+
+ok('reset: two snapshots in the same second get -2', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(root, { 'profile.md': 'p\n' })
+  const now = new Date(2026, 10, 13, 17, 7, 26)
+  const first = snapshotMemory({ root }, 'backup', now)
+  const second = snapshotMemory({ root }, 'backup', now)
+  assert.strictEqual(first.name, 'backup-20261113-170726')
+  assert.strictEqual(second.name, 'backup-20261113-170726-2')
+  assert.strictEqual(first.files, 1)
+  assert.strictEqual(fs.readFileSync(path.join(second.dir, 'profile.md'), 'utf8'), 'p\n')
+})
+
+ok('reset: reload picks the newest backup/reset snapshot, safety only when named', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(root, {
+    'profile.md': 'current\n',
+    'backups/backup-20261112-090000/profile.md': 'older\n',
+    'backups/reset-20261113-100000/profile.md': 'newest\n',
+    'backups/safety-20261113-120000/profile.md': 'safety\n',
+  })
+  const latest = latestSnapshot({ root })
+  assert.strictEqual(latest.name, 'reset-20261113-100000', 'a reset must be undoable')
+  assert.deepStrictEqual(
+    listSnapshots({ root }).map((row) => row.name),
+    ['safety-20261113-120000', 'reset-20261113-100000', 'backup-20261112-090000'],
+  )
+  const restored = restoreSnapshot({ root }, 'safety-20261113-120000', new Date(2026, 10, 13, 13, 0, 0))
+  assert.strictEqual(fs.readFileSync(path.join(root, 'profile.md'), 'utf8'), 'safety\n')
+  assert.strictEqual(restored.safety, 'safety-20261113-130000')
+})
+
+ok('reset: a safety snapshot restores as a mirror and deletes what the restore added', () => {
+  // The bug this covers: "undo the restore" used to restore the overwritten
+  // files but leave every file the restore had resurrected, so the undo was
+  // incomplete. A safety-* snapshot is the complete state before that restore,
+  // so its restore has to delete what the restore added.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(root, {
+    'profile.md': 'cleared\n',
+    'state.json': '{"lastRunDay":""}\n',
+    'backups/safety-20261113-200000/profile.md': 'cleared\n',
+    'backups/safety-20261113-200000/state.json': '{"lastRunDay":""}\n',
+    'backups/reset-20261113-170000/profile.md': 'restored profile\n',
+    'backups/reset-20261113-170000/facts.md': 'restored fact\n',
+    'backups/reset-20261113-170000/daily/2026-11-10.md': 'restored note\n',
+  })
+  // A restore already happened: those files are back on disk.
+  writeTree(root, {
+    'profile.md': 'restored profile\n',
+    'facts.md': 'restored fact\n',
+    'daily/2026-11-10.md': 'restored note\n',
+  })
+  const mirrored = restoreSnapshot({ root }, 'safety-20261113-200000', new Date(2026, 10, 13, 20, 30, 0))
+  assert.strictEqual(mirrored.mirror, true, 'a safety snapshot is a mirror')
+  assert.strictEqual(fs.readFileSync(path.join(root, 'profile.md'), 'utf8'), 'cleared\n')
+  assert.ok(!fs.existsSync(path.join(root, 'facts.md')), 'a file the restore added is deleted again')
+  assert.ok(!fs.existsSync(path.join(root, 'daily', '2026-11-10.md')), 'so is a note it added')
+  assert.deepStrictEqual(mirrored.removed.sort(), ['daily/2026-11-10.md', 'facts.md'])
+  assert.deepStrictEqual(mirrored.kept, [], 'a mirror keeps nothing')
+
+  // The overlay branch must stay an overlay: same setup, backup-* snapshot.
+  const overlayRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(overlayRoot, {
+    'profile.md': 'restored profile\n',
+    'facts.md': 'restored fact\n',
+    'backups/backup-20261113-200000/profile.md': 'old profile\n',
+  })
+  const overlaid = restoreSnapshot({ root: overlayRoot }, 'backup-20261113-200000', new Date(2026, 10, 13, 20, 30, 0))
+  assert.strictEqual(overlaid.mirror, false)
+  assert.deepStrictEqual(overlaid.kept, ['facts.md'], 'a backup-* restore keeps files it did not contain')
+  assert.ok(fs.existsSync(path.join(overlayRoot, 'facts.md')))
+})
+
+ok('reset: restore overwrites what the snapshot has and keeps the rest', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-reset-'))
+  writeTree(root, {
+    'profile.md': 'new profile\n',
+    'facts.md': 'only here\n',
+    'config.json': '{"schedule":"23:30"}\n',
+    'daily/2026-11-12.md': 'today\n',
+    'backups/backup-20261113-100000/profile.md': 'old profile\n',
+    'backups/backup-20261113-100000/daily/2026-11-10.md': 'old note\n',
+    'backups/backup-20261113-100000/state.json': '{"lastRunDay":"2026-11-10"}\n',
+    // Only memory paths may come back: a snapshot carrying config.json must not
+    // be able to rewrite the schedule.
+    'backups/backup-20261113-100000/config.json': '{"schedule":"00:00"}\n',
+  })
+  const result = restoreSnapshot({ root }, 'backup-20261113-100000', new Date(2026, 10, 13, 17, 0, 0))
+  assert.strictEqual(fs.readFileSync(path.join(root, 'profile.md'), 'utf8'), 'old profile\n')
+  assert.strictEqual(fs.readFileSync(path.join(root, 'daily', '2026-11-10.md'), 'utf8'), 'old note\n')
+  assert.strictEqual(fs.readFileSync(path.join(root, 'daily', '2026-11-12.md'), 'utf8'), 'today\n', 'not deleted')
+  assert.strictEqual(fs.readFileSync(path.join(root, 'config.json'), 'utf8'), '{"schedule":"23:30"}\n', 'config is untouched')
+  assert.ok(!result.restored.includes('config.json'))
+  assert.deepStrictEqual(result.kept.sort(), ['daily/2026-11-12.md', 'facts.md'])
+  const safety = fs.readFileSync(path.join(root, 'backups', result.safety, 'profile.md'), 'utf8')
+  assert.strictEqual(safety, 'new profile\n', 'the safety snapshot is the pre-restore state')
+})
+
+ok('slash: the palette copy is Chinese and the argument tokens stay English', () => {
+  const byName = new Map(SLASH_COMMANDS.map((entry) => [entry.name, entry]))
+  assert.deepStrictEqual([...byName.keys()].sort(), ['backup', 'new', 'reload'])
+  for (const command of SLASH_COMMANDS) {
+    assert.ok(command.description.trim().length > 0, `${command.name} needs a description`)
+    assert.ok(/[\u4e00-\u9fff]/.test(command.description), `${command.name} description must be Chinese`)
+  }
+  assert.ok(byName.get('new').hint.includes('confirm'), 'the argument token stays confirm')
+  assert.ok(byName.get('reload').hint.includes('快照'), 'the reload hint is a directory name, explained in Chinese')
+  assert.strictEqual(byName.get('backup').hint, undefined, '/backup takes no argument')
+})
+
+ok('slash: /new previews without writing; /backup and /reload fail loudly when empty', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-slash-'))
+  writeTree(root, memoryFixture)
+  const before = treeState(root)
+  const preview = runSlash({ root }, 'new', '')
+  assert.strictEqual(preview.kind, 'success')
+  assert.ok(preview.text.includes('执行 /new confirm 才会真的清空'), preview.text)
+  assert.deepStrictEqual(treeState(root), before, 'no confirm, no write')
+  assert.strictEqual(runSlash({ root }, 'new', 'yes').kind, 'error')
+  assert.strictEqual(runSlash({ root }, 'backup', 'now').kind, 'error', '/backup takes no argument')
+
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-pm-slash-'))
+  const backupMiss = runSlash({ root: empty }, 'backup', '')
+  assert.strictEqual(backupMiss.kind, 'error')
+  assert.ok(backupMiss.text.includes('记忆还是空的'), backupMiss.text)
+  const reloadMiss = runSlash({ root: empty }, 'reload', '')
+  assert.strictEqual(reloadMiss.kind, 'error')
+  assert.ok(reloadMiss.text.includes('还没有可恢复的快照'), reloadMiss.text)
+  const traversal = runSlash({ root: empty }, 'reload', '../../etc')
+  assert.strictEqual(traversal.kind, 'error', 'a path is not a snapshot name')
+  assert.ok(traversal.text.includes('../..'), traversal.text)
+  assert.strictEqual(runSlash({ root: empty }, 'reload', 'backup-20200101-000000').kind, 'error')
+
+  const now = new Date(2026, 10, 13, 17, 7, 26)
+  const confirmed = runSlash({ root }, 'new', 'confirm', { now })
+  assert.strictEqual(confirmed.kind, 'success', confirmed.text)
+  assert.ok(confirmed.text.includes(path.join(root, 'backups', 'reset-20261113-170726')), confirmed.text)
+  const reloaded = runSlash({ root }, 'reload', 'reset-20261113-170726', { now: new Date(2026, 10, 13, 17, 8, 0) })
+  assert.strictEqual(reloaded.kind, 'success', reloaded.text)
+  assert.strictEqual(fs.readFileSync(path.join(root, 'profile.md'), 'utf8'), '# 用户画像\n', 'round trip restores memory')
+  const keptState = JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8'))
+  assert.strictEqual(keptState.lastRunDay, '2026-11-12', 'state.json came back with the snapshot')
 })
 
 await Promise.all(pending)

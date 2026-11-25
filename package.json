@@ -1,6 +1,6 @@
 {
   "name": "dsh-persona-memory",
-  "version": "0.3.7",
+  "version": "0.3.9",
   "description": "Daily cross-workspace session digest that grows a user profile, a companion personality and an append-only lessons list, then injects all three into every prompt.",
   "type": "module",
   "main": "lib/index.js",
@@ -47,10 +47,14 @@
   ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-commands": "^0.2.1-rc.1",
     "@deepseek-ai/dsh-tools": "^0.2.1-rc.1",
     "@deepseek-ai/dsh-llm": "^0.2.1-rc.1"
   },
   "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-commands": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-llm": {
       "optional": true
     }

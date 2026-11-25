@@ -1,4 +1,4 @@
-# dsh-persona-memory 设计文档（更新至 v0.3.7）
+# dsh-persona-memory 设计文档（更新至 v0.3.8）
 
 > 目标：每天定时跨工作区、跨会话总结当天内容 → 沉淀到同一份记忆 → 提炼用户的沟通习惯与思维模式 → 每轮对话自动注入，让回复更贴合用户。
 >
@@ -673,3 +673,43 @@ title: 助手性格
 3. 注入兼容（小段常驻索引，与工具式并存）
 
 顺序按依赖排；第 3 项会占提示预算，放最后。
+
+## 27. 斜杠命令 /new /backup /reload（v0.3.8 / v0.3.9）
+
+**为什么只有这三条**：记忆全在本地文件里，可用户要的只有三件事 —— 从零开始（`/new`）、先留一份再动（`/backup`）、弄坏了退回来（`/reload`）。设置页能做单条 rollback，但它在浏览器里，且只覆盖四份文档；删了 `history/`、`logs/` 或整个目录就无从恢复。命令是给「在对话里一句话把记忆归零 / 存档 / 回滚」用的。
+
+**宿主契约（0.2.2-rc.1 实测，与文档口径有出入，以代码为准）**：
+
+- `ctx.commands.register({ definitionId, name, description, input?, handler })` —— 注册项字段是 **`handler`**，不是 `execute`；`lib/types/index.js` 的 `normalizeDefinition` 对 `typeof definition.handler !== 'function'` 直接抛 `TypeError`，`execute` 只出现在 registry 自己的 `execute(agent, line, …)` 方法上。本插件用 `handler`。
+- `handler(invocation)` 收到 `{ commandId, agent, rawInput, attachments }`；`rawInput` 是斜杠后的原文（含前导空格）。返回 `{ kind: 'success'|'error', text }`，`error` 必须带 `text`。
+- `input.hint` 只要出现就必须是非空字符串；`name` 必须匹配 `/^[a-z][a-z0-9_-]*$/`。`new` / `backup` / `reload` 都不与内置（goal / plan / feedback / compact / permission / export）冲突。
+- 注册放在 `ctx.inject(['commands'], scope => …)` 里，**不写进模块级 `inject`**：宿主没有 commands 插件时 `ctx.commands` 是 undefined，模块级依赖会让整个插件起不来 —— 记忆不该因为一个可选 UI 能力陪葬。`@deepseek-ai/dsh-commands/brand` 用动态 `import()` 加恒等兜底（`CommandDefinitionId` 本体就是 `return id`），所以即便宿主的运行时不带这个包也能加载。
+- 命令名撞车只记一行 `warn`，不抛：别的插件占了 `/new` 不该让记忆功能整体失败。
+
+**文件集合（三条命令共用一份定义，`lib/reset.js`）**：
+
+- 记忆（会被清、被存、被覆盖）：`profile.md`、`persona.md`、`lessons.md`、`facts.md`、`identity.json`、`state.json`，以及目录 `daily/`、`history/`、`logs/`。
+- 保留（永远不动）：`config.json`（调度 / 模型 / 预算）、`backups/`（快照本身）、`.run.lock`（属于正在跑的摘要）。
+- 只依赖 `paths.root`，所以整个模块能在临时目录里跑，不需要宿主。
+
+**/new**：不带参数只预览（只 stat，不写；返回每项的路径、文件数、字节数），结尾必须出现「执行 /new confirm 才会真的清空」。`/new confirm` 的次序是**先快照 `backups/reset-<ts>/`，再删**；快照抛错就整体中止，不存在「没备份就先删」的路径。删除只删集合内的路径，删前对每个绝对路径做「必须在 `paths.root` 之内」的前缀断言；`daily/`、`history/`、`logs/` 删完立刻重建空目录（否则下一次日更写盘会 ENOENT），`state.json` 用 `loadState`（文件刚被删 → 返回默认值）重建为空状态。调度游标在内存里，不受影响。清空失败的两种情形文案不同：快照就失败（记忆没动）vs 快照成功但清空没做完（给出 `/reload <snapshot>` 的退路）。
+
+**/backup**：只快照、不列表、不接受参数。记忆为空时返回 error，不生成空快照。
+
+**/reload**：无参数时在 `backups/` 里按目录名里的时间戳取最新的 `backup-*` / `reset-*`（`reset-*` 参与，所以 `/new confirm` 可撤销）；`safety-*` **不参与**无参数选择，但可以被显式指定。恢复前先给当前状态拍 `safety-<ts>/`，失败即中止。恢复语义是**覆盖不是镜像**：按允许清单（六个记忆文件 + 三个目录）逐个 `copyFileSync` 回根目录 —— 快照里混进的 `config.json` 之类不会被写回；当前多出来的文件保留并在回复的 `kept` 里列出。快照名先过 `/^(backup|reset|safety)-\d{8}-\d{6}(-\d+)?$/` 再做前缀断言，`/reload ../..` 之类直接被拒。
+
+**实现分层**：`lib/reset.js` 只碰文件系统（`memoryEntries` / `previewReset` / `snapshotMemory` / `clearMemory` / `resetMemory` / `listSnapshots` / `latestSnapshot` / `restoreSnapshot`）；`lib/slash.js` 负责 `rawInput.trim()` 的解析与全部文案（`runSlash` 永不抛，返回 `{kind,text}`；`onStateChange` 回调让宿主刷新内存里的 state）；`lib/index.js` 只做注册、忙碌守卫（摘要运行中三条命令都拒绝）和 `Object.assign(state, loadState(...))`。
+
+**取舍**：快照目录名用本地时间 `yyyyMMdd-HHmmss`，同秒冲突补 `-2`、`-3`（不覆盖）；「最新」按目录名里的时间排，不看 mtime（恢复会改变目录 mtime）；`state.json` 必须在记忆集合里，否则回滚出一份「记忆清空但 `lastRunDay` 还是昨天」的错位状态。
+
+**验证**：`node test/run.mjs` 99 项。新增 7 项：预览只读（前后目录快照逐字节比 mtime/size）、`/new confirm` 的快照含 `history/` 与 `logs/` 且 `config.json` 原样、快照失败时一个文件都不能少（用「`backups` 位置放普通文件」注入失败 —— Windows 的目录只读位拦不住写）、同秒快照 `-2`、`latestSnapshot` 跳过 `safety-` 且能显式指定、恢复覆盖 + `kept` 列表 + 自动 `safety-`、命令层预览不写盘 / 空库 `/backup` 与 `/reload` 返回 error 而不抛。另跑 `test/demo-slash.mjs` 完成一次真实往返（临时目录，真实记忆目录前后文件列表 / 大小 / mtime 完全一致）。
+
+### 27.1 v0.3.9：safety 快照改成镜像 + 命令描述改中文
+
+**为什么改恢复语义**：上一版 `/reload` 一律「覆盖」——快照里有的文件写回去，当前多出来的保留。对 `backup-*` / `reset-*` 是对的，但用 `safety-*` 撤销一次恢复时，**上一轮恢复新增的文件删不掉**：实测撤销后 `profile.md` 仍然存在（demo 里那行 `after undo profile.md exists: true`）。`safety-*` 恰恰是"恢复前那一刻的完整状态"，只有镜像才叫撤销。
+
+现在的分支规则写在 `restoreSnapshot` 里：目录名以 `safety-` 开头 → 先删掉记忆集合里快照没有的文件，再覆盖；其余仍是覆盖。回复文案随之区分——镜像写「删除（快照里没有）：…」，覆盖写「保留（快照里没有）：…」。
+
+**为什么描述是中文**：宿主命令 schema 对 `description` 只校验 `typeof === 'string'`（非空），没有 locale 字段，也没有 `descriptionByLocale` 之类的入口，所以面板上只能显示一种语言。用户要求中文，于是三条命令的 `description` / `hint` 改成中文，参数 token 保留英文（`confirm`、快照目录名）——它们是真的要照着输入的字符。
+
+**测试（99 → 101）**：①`safety-*` 镜像恢复后，恢复新增的文件被删、`removed` 正确、`kept` 为空；同一场景下 `backup-*` 仍然保留新增文件（两条断言同时存在，防止把覆盖语义改坏）。②三条命令的 `description` 非空且含中文、`hint` 里的 token 仍是 `confirm` / 目录名占位、`/backup` 没有 `hint`。

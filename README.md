@@ -173,6 +173,31 @@ Models occasionally stop mid-sentence (stream cut, near-timeout) and leave the J
 - The run summary and the page banner both say "this answer was truncated, kept N" instead of looking like "nothing to write today".
 - `{"add":[]}` is still a valid answer (nothing to write today) and raises nothing.
 
+## Slash commands
+
+Three commands sit in the host's command palette. They are registered only when the host composes the `commands` plugin (memory itself keeps working without it):
+
+| Command | What it does |
+|---|---|
+| `/new` | Preview what a reset would delete (every path with its file count and bytes). `/new confirm` snapshots all memory into `backups/reset-<timestamp>/` **first**, then deletes it |
+| `/backup` | Snapshot all memory into `backups/backup-<timestamp>/` right now |
+| `/reload` | Restore from the newest `backup-*` / `reset-*` snapshot; `/reload <dir>` restores one by name (a `safety-*` snapshot included) |
+
+**What counts as memory** — and therefore what these three commands touch:
+
+- Cleared / snapshotted / restored: `profile.md`, `persona.md`, `lessons.md`, `facts.md`, `identity.json`, `state.json`, and the `daily/`, `history/`, `logs/` directories.
+- Never touched: `config.json` (schedule, model, budget) and `backups/` (the snapshots). That exclusion is exactly what makes a reset undoable.
+
+Details that matter when you use them:
+
+- `/new` without `confirm` is a **preview only**: it stats every entry and prints its size, and writes nothing (not even an mtime).
+- `/new confirm` deletes only after the snapshot is complete; a failed snapshot aborts the command with the memory files untouched. The reply names the snapshot directory, and the empty `daily/` / `history/` / `logs/` directories stay behind so the next digest can write into them; `state.json` is rebuilt empty (the schedule cursor lives in memory and is unaffected).
+- **Two restore semantics.** `backup-*` / `reset-*` are **overwrite**: files the snapshot contains are written back, while files that exist now but not in the snapshot are **kept and listed** in the reply. `safety-*` is a **mirror**: it captures the complete state before a restore began, so restoring it deletes the files that restore had added. That is what makes `undo this restore: /reload safety-<timestamp>` a real undo — with overwrite alone it could not remove what the restore brought back.
+- Before writing anything `/reload` takes a `safety-*` snapshot, so the restore itself can be undone.
+- **The palette copy is Chinese**: the host's command schema accepts a plain string for `description` and has no locale field, so there is no English variant. Argument tokens stay English (`confirm`, the snapshot directory name).
+- Timestamps are local `yyyyMMdd-HHmmss`; two snapshots in the same second get `-2`, `-3`.
+- All three refuse to run while a digest is in flight.
+
 ## Tools
 
 | Tool | Purpose |
@@ -197,6 +222,7 @@ $DSH_HOME/persona-memory/
 ├── config.json           # settings-page overrides (optional)
 ├── daily/YYYY-MM-DD.md   # daily note: summary / observations / judgments / suspects / open threads
 ├── history/              # pre-write backups: profile-<date>-<ms>.md (same for persona / lessons / facts)
+├── backups/              # /backup, /new, /reload snapshots: backup-<ts>/ reset-<ts>/ safety-<ts>/
 ├── state.json            # scheduler state
 └── logs/run-YYYY-MM-DD.jsonl
 ```
